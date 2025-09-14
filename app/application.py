@@ -1,21 +1,24 @@
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, 
-    QDockWidget, QWidget, QVBoxLayout, QLabel
+    QDockWidget, QWidget, QVBoxLayout, QLabel, QStyleFactory
+
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
 import sys
+import darkdetect
 from video import create_video_dock
 from fileAccess import create_file_dock
 from dataSheet import create_data_sheet_dock
 from virtualField import create_virtual_field_dock
+from palette import get_light_palette, get_dark_palette
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
         self.setWindowTitle("Hudl AI Analysis")
-        self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint)
+        self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
         self.resize(1200, 800)
         
         # Store current folder path
@@ -77,6 +80,32 @@ class MainWindow(QMainWindow):
         scoreboard_action.triggered.connect(self.toggle_scoreboard)
         window_menu.addAction(scoreboard_action)
 
+        # Add ability to change palette theme
+        window_menu = menu_bar.addMenu("Theme")
+        window_menu.addAction("Light", lambda: app.setPalette(get_light_palette()))
+        window_menu.addAction("Dark", lambda: app.setPalette(get_dark_palette()))
+        window_menu.addAction("System", lambda: apply_system_theme(app))
+
+    def create_dock(self, title):
+        dock = QDockWidget(title, self)
+        dock.setAllowedAreas(Qt.AllDockWidgetAreas)
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
+        dock.setTitleBarWidget(QWidget())
+
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel(f"{title} content here"))
+        widget.setLayout(layout)
+
+        widget.setStyleSheet("""
+            QWidget {
+                border: 2px solid #888;
+            }
+        """)
+
+        dock.setWidget(widget)
+        return dock
+
     def open_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Open Folder")
         if folder:
@@ -123,8 +152,18 @@ class MainWindow(QMainWindow):
         self.resizeDocks([self.video_dock, self.data_dock, self.file_dock, self.virtual_dock], 
                         [half_height, half_height, half_height, half_height], Qt.Vertical)
 
+
+def apply_system_theme(app):
+    if darkdetect.isDark():
+        app.setPalette(get_dark_palette())
+    else:
+        app.setPalette(get_light_palette())
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyle(QStyleFactory.create("Fusion"))
+    apply_system_theme(app)
     window = MainWindow()
     window.show()
     
