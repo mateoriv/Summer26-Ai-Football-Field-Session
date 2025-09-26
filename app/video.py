@@ -15,6 +15,7 @@ class CustomVideoWidget(QWidget):
         super().__init__(parent)
         self.setStyleSheet("background-color: black;")
         self.detection_data = None
+        self.yard_marker_data = None  # Add yard marker data
         self.current_frame = 0
         self.show_boxes = True
         self.overlay_items = []
@@ -102,9 +103,13 @@ class CustomVideoWidget(QWidget):
                 scaled_pixmap = pixmap.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 painter.drawPixmap(0, 0, scaled_pixmap)
                 
-                # Draw bounding boxes if enabled
+                # Draw player bounding boxes if enabled
                 if self.show_boxes and self.detection_data:
                     self.draw_bounding_boxes(painter, scaled_pixmap.size())
+                
+                # Draw yard marker bounding boxes if enabled
+                if hasattr(self.parent_window, 'show_yard_marker_boxes') and self.parent_window.show_yard_marker_boxes and self.yard_marker_data:
+                    self.draw_yard_marker_boxes(painter, scaled_pixmap.size())
             else:
                 # Draw black background if no frame
                 painter.fillRect(self.rect(), QColor(0, 0, 0))
@@ -183,6 +188,78 @@ class CustomVideoWidget(QWidget):
         class_name = detection.get('class', 'player')
         painter.setPen(QPen(QColor(255, 255, 255), 1))
         painter.drawText(scaled_x, scaled_y - 5, f"{class_name} {confidence:.2f}")
+    
+    def draw_yard_marker_boxes(self, painter, video_size):
+        """Draw yard marker bounding boxes on the video"""
+        if not self.yard_marker_data or 'frames' not in self.yard_marker_data:
+            return
+        
+        # Get yard marker detections for current frame
+        current_detections = self.get_yard_marker_detections_for_frame(self.current_frame)
+        
+        if current_detections:
+            print(f"🏈 Drawing {len(current_detections)} yard marker boxes for frame {self.current_frame}")
+            
+            # Calculate scaling factors
+            scale_x = video_size.width() / 1280  # Assume original video is 1280x720
+            scale_y = video_size.height() / 720
+            
+            for detection in current_detections:
+                self.draw_single_yard_marker_bbox(painter, detection, scale_x, scale_y)
+        else:
+            print(f"🏈 No yard marker detections for frame {self.current_frame}")
+    
+    def get_yard_marker_detections_for_frame(self, frame_number):
+        """Get yard marker detections for a specific frame number"""
+        if not self.yard_marker_data or 'frames' not in self.yard_marker_data:
+            return []
+        
+        # Find the closest frame in the data
+        closest_frame = None
+        min_diff = float('inf')
+        
+        for frame_data in self.yard_marker_data['frames']:
+            frame_idx = frame_data.get('frame_number', 0)
+            diff = abs(frame_idx - frame_number)
+            if diff < min_diff:
+                min_diff = diff
+                closest_frame = frame_data
+        
+        if closest_frame and min_diff < 15:
+            return closest_frame.get('detections', [])
+        
+        return []
+    
+    def draw_single_yard_marker_bbox(self, painter, detection, scale_x, scale_y):
+        """Draw a single yard marker bounding box"""
+        bbox = detection.get('bbox', {})
+        if not bbox or 'x1' not in bbox:
+            return
+        
+        # Extract coordinates
+        x1 = bbox.get('x1', 0)
+        y1 = bbox.get('y1', 0)
+        x2 = bbox.get('x2', 0)
+        y2 = bbox.get('y2', 0)
+        
+        # Scale coordinates using provided scaling factors
+        scaled_x = int(x1 * scale_x)
+        scaled_y = int(y1 * scale_y)
+        scaled_w = int((x2 - x1) * scale_x)
+        scaled_h = int((y2 - y1) * scale_y)
+        
+        # Draw yard marker bounding box (green color)
+        painter.setPen(QPen(QColor(0, 255, 0), 3))
+        painter.setBrush(QBrush(QColor(0, 255, 0, 50)))
+        painter.drawRect(scaled_x, scaled_y, scaled_w, scaled_h)
+        
+        # Draw label
+        confidence = detection.get('confidence', 0.0)
+        class_name = detection.get('class', 'yard_marker')
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.drawText(scaled_x, scaled_y - 5, f"{class_name} {confidence:.2f}")
+        
+        print(f"🏈 Drawing {class_name} box: ({scaled_x}, {scaled_y}) {scaled_w}x{scaled_h} conf={confidence:.2f}")
     
     def test_display_boxes(self):
         """Test function"""
@@ -860,12 +937,12 @@ def create_video_title_bar(dock):
     right_spacer.setFixedWidth(20)  # Space for buttons on the right
     layout.addWidget(right_spacer)
     
-    # Bounding boxes checkbox
+    # Player bounding boxes checkbox
     bbox_checkbox = QPushButton("📦")
     bbox_checkbox.setFixedSize(20, 20)
     bbox_checkbox.setCheckable(True)
     bbox_checkbox.setChecked(True)  # Bounding boxes visible by default
-    bbox_checkbox.setToolTip("Toggle Bounding Boxes")
+    bbox_checkbox.setToolTip("Toggle Player Bounding Boxes")
     bbox_checkbox.setStyleSheet("""
         QPushButton {
             background-color: transparent;
@@ -887,6 +964,34 @@ def create_video_title_bar(dock):
     """)
     bbox_checkbox.clicked.connect(lambda: toggle_bounding_boxes(dock.parent(), bbox_checkbox))
     layout.addWidget(bbox_checkbox)
+    
+    # Yard marker bounding boxes checkbox
+    yard_marker_checkbox = QPushButton("🏈")
+    yard_marker_checkbox.setFixedSize(20, 20)
+    yard_marker_checkbox.setCheckable(True)
+    yard_marker_checkbox.setChecked(False)  # Yard markers off by default
+    yard_marker_checkbox.setToolTip("Toggle Yard Marker Bounding Boxes")
+    yard_marker_checkbox.setStyleSheet("""
+        QPushButton {
+            background-color: transparent;
+            border: none;
+            color: white;
+            padding: 4px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: #404040;
+        }
+        QPushButton:pressed {
+            background-color: #505050;
+        }
+        QPushButton:checked {
+            background-color: #28a745;
+        }
+    """)
+    yard_marker_checkbox.clicked.connect(lambda: toggle_yard_marker_boxes(dock.parent(), yard_marker_checkbox))
+    layout.addWidget(yard_marker_checkbox)
     
     # Close button (X)
     close_btn = QPushButton("✕")
@@ -1212,6 +1317,36 @@ def toggle_bounding_boxes(parent, button):
     else:
         print("❌ No custom video widget found!")
 
+def toggle_yard_marker_boxes(parent, button):
+    """Toggle yard marker bounding box visibility on the custom video widget"""
+    if not hasattr(parent, 'show_yard_marker_boxes'):
+        parent.show_yard_marker_boxes = False
+    
+    parent.show_yard_marker_boxes = button.isChecked()
+    
+    # Update custom video widget
+    if hasattr(parent, 'custom_video'):
+        custom_video = parent.custom_video
+        
+        if parent.show_yard_marker_boxes:
+            print("🏈 Yard marker boxes: ON")
+            # Try to load yard marker detection data if available
+            load_yard_marker_data_for_custom_video(parent)
+            
+            # Test the display
+            print("🔧 Testing custom video yard marker display...")
+            custom_video.test_display_boxes()
+            custom_video.force_update()
+            print("🔧 Test complete!")
+        else:
+            print("🏈 Yard marker boxes: OFF")
+            # Clear yard marker data when disabled
+            if hasattr(custom_video, 'yard_marker_data'):
+                custom_video.yard_marker_data = None
+                custom_video.update()
+    else:
+        print("❌ No custom video widget found!")
+
 def find_video_widget(parent):
     """Find the BoundingBoxGraphicsView in the parent's dock widgets"""
     print(f"🔍 Searching for video widget in {len(parent.findChildren(QDockWidget))} dock widgets")
@@ -1315,3 +1450,47 @@ def load_detection_data_for_custom_video(parent):
             parent.custom_video.set_detection_data(None)
             parent.custom_video.set_show_boxes(False)
             print("🚫 No detection data - bounding boxes disabled")
+
+def load_yard_marker_data_for_custom_video(parent):
+    """Load yard marker detection data for custom video widget"""
+    if not hasattr(parent, 'current_video_path') or not parent.current_video_path:
+        print("❌ No current video path set")
+        return
+    
+    # Construct yard marker detection file path
+    video_path = parent.current_video_path
+    video_name = os.path.splitext(os.path.basename(video_path))[0]
+    
+    # Get the project root directory (two levels up from app/)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    yard_marker_file = os.path.join(project_root, "cache", "processed_videos", f"{video_name}_yard_markers.json")
+    
+    print(f"🔍 Looking for yard marker detection file: {yard_marker_file}")
+    
+    if os.path.exists(yard_marker_file):
+        try:
+            with open(yard_marker_file, 'r') as f:
+                yard_marker_data = json.load(f)
+            
+            print(f"✅ Loaded yard marker detection data: {len(yard_marker_data.get('frames', []))} frames")
+            
+            # Set yard marker data in custom video widget
+            if hasattr(parent, 'custom_video'):
+                parent.custom_video.yard_marker_data = yard_marker_data
+                print("🏈 Yard marker data set in custom video widget")
+            else:
+                print("❌ No custom video widget found")
+                
+        except Exception as e:
+            print(f"❌ Error loading yard marker detection data: {e}")
+            # Clear yard marker data on error
+            if hasattr(parent, 'custom_video'):
+                parent.custom_video.yard_marker_data = None
+    else:
+        print(f"❌ Yard marker detection file not found: {yard_marker_file}")
+        print("   Process the video first to generate yard marker detection data")
+        
+        # Clear yard marker data when no file exists
+        if hasattr(parent, 'custom_video'):
+            parent.custom_video.yard_marker_data = None
+            print("🚫 No yard marker data - yard marker boxes disabled")

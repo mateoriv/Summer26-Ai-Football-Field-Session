@@ -1,8 +1,0 @@
-{
-  "video_path": "testing_data/video/Wide - Clip 003.mp4",
-  "video_name": "Wide - Clip 003",
-  "detection_output": "cache/processed_videos/Wide - Clip 003_detection.json",
-  "homography_output": null,
-  "field_video_output": null,
-  "status": "completed"
-}

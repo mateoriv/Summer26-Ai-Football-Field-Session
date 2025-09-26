@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import sys
+import subprocess
 from pathlib import Path
 
 def process_video(video_path, output_dir="cache/processed_videos"):
@@ -32,9 +33,16 @@ def process_video(video_path, output_dir="cache/processed_videos"):
     # Step 1: Player Detection
     print("Step 1: Running player detection...")
     detection_output = f"{output_dir}/{video_name}_detection.json"
-    detection_cmd = f"python3 Scripts/playerDetection.py --video '{video_path}' --output '{detection_output}'"
-    print(f"Running: {detection_cmd}")
-    # TODO: Execute detection command
+    detection_cmd = ["python3", "Scripts/playerDetection.py", "--video", video_path, "--output", detection_output]
+    print(f"Running: {' '.join(detection_cmd)}")
+    
+    try:
+        result = subprocess.run(detection_cmd, capture_output=True, text=True, check=True)
+        print("✅ Player detection completed successfully")
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Player detection failed: {e.stderr}")
+        raise Exception(f"Player detection failed: {e.stderr}")
     
     # Step 2: Homography Transformation (if correspondence points exist)
     print("Step 2: Checking for homography transformation...")
@@ -42,9 +50,16 @@ def process_video(video_path, output_dir="cache/processed_videos"):
     if os.path.exists(correspondence_file):
         print("Correspondence points found, running homography transformation...")
         homography_output = f"{output_dir}/{video_name}_homography.json"
-        homography_cmd = f"python3 Scripts/homographyTransform.py --input '{detection_output}' --correspondence '{correspondence_file}' --output '{homography_output}'"
-        print(f"Running: {homography_cmd}")
-        # TODO: Execute homography command
+        homography_cmd = ["python3", "Scripts/homographyTransform.py", "--input", detection_output, "--correspondence", correspondence_file, "--output", homography_output]
+        print(f"Running: {' '.join(homography_cmd)}")
+        
+        try:
+            result = subprocess.run(homography_cmd, capture_output=True, text=True, check=True)
+            print("✅ Homography transformation completed successfully")
+            print(result.stdout)
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Homography transformation failed: {e.stderr}")
+            raise Exception(f"Homography transformation failed: {e.stderr}")
     else:
         print("No correspondence points found, skipping homography transformation")
         homography_output = None
@@ -53,9 +68,16 @@ def process_video(video_path, output_dir="cache/processed_videos"):
     if homography_output and os.path.exists(homography_output):
         print("Step 3: Rendering field video...")
         field_video_output = f"{output_dir}/{video_name}_field.mp4"
-        render_cmd = f"python3 Scripts/renderFieldVideo.py --input '{homography_output}' --output '{field_video_output}'"
-        print(f"Running: {render_cmd}")
-        # TODO: Execute render command
+        render_cmd = ["python3", "Scripts/renderFieldVideo.py", "--input", homography_output, "--output", field_video_output]
+        print(f"Running: {' '.join(render_cmd)}")
+        
+        try:
+            result = subprocess.run(render_cmd, capture_output=True, text=True, check=True)
+            print("✅ Field video rendering completed successfully")
+            print(result.stdout)
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Field video rendering failed: {e.stderr}")
+            raise Exception(f"Field video rendering failed: {e.stderr}")
     else:
         print("Skipping field video rendering (no homography data)")
         field_video_output = None

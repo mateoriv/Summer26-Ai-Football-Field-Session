@@ -1,54 +1,200 @@
-#MAY NOT BE NEEDED
+#!/usr/bin/env python3
+"""
+Yard Marker Detection Script
 
-# script to detect yard markers in a video file
-#input: video file
-#output: json file with frame by frame yard marker detection data,
-#saved as yardMarkerDetection.json in the cache folder
+Detects yard markers in football video using YOLO model.
+Classes: nr1,nr2,nr3,nr4,n5,nl1,nl2,nl3,nl4,fr1,fr2,fr3,fr4,f5,fl1,fl2,fl3,fl4
 
-#sample json output:
-# Example of the expected JSON output format for yard marker detections:
-# {
-#     "frames": [
-#         {
-#             "frame_number": 0,
-#             "timestamp": 0.0,
-#             "detections": [
-#                 {
-#                     "class": "yard_marker",
-#                     "class_id": 0,
-#                     "confidence": 0.852,
-#                     "bbox": {
-#                         "x1": 592.7,
-#                         "y1": 381.6,
-#                         "x2": 617.7,
-#                         "y2": 444.4,
-#                         "width": 25.0,
-#                         "height": 62.7,
-#                         "center_x": 605.2,
-#                         "center_y": 413.0
-#                     }
-#                 }
-#             ]
-#         }
-#     ]
-# }
+Input: video file
+Output: JSON file with frame-by-frame yard marker detection data
+"""
 
 import cv2
 import json
 import os
+import sys
+from pathlib import Path
+import torch
+from ultralytics import YOLO
+import numpy as np
 
-def yardMarkerDetection(video_path):
+# Class mapping for yard marker classes
+YARD_MARKER_CLASSES = {
+    0: 'nr1', 1: 'nr2', 2: 'nr3', 3: 'nr4', 4: 'n5',
+    5: 'nl1', 6: 'nl2', 7: 'nl3', 8: 'nl4', 9: 'n5',
+    10: 'fr1', 11: 'fr2', 12: 'fr3', 13: 'fr4', 14: 'f5',
+    15: 'fl1', 16: 'fl2', 17: 'fl3', 18: 'fl4'
+}
+
+def yardMarkerDetection(video_path, model_path="yolo_models/bestYardMarker.pt", confidence_threshold=0.5):
     """
-    Detect yard markers in video frames using a trained yolo model
+    Detect yard markers in video frames using a trained YOLO model
     
     Args:
         video_path: Path to input video file
+        model_path: Path to YOLO model file
+        confidence_threshold: Minimum confidence for detections
     
     Returns:
         Dictionary with detection results
     """
-    # TODO: Implement yard marker detection logic
-    pass
+    print(f"🎯 Starting yard marker detection for: {video_path}")
+    
+    # Check if video file exists
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+    
+    # Check if model file exists
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    # Load YOLO model
+    print(f"📦 Loading YOLO model: {model_path}")
+    try:
+        model = YOLO(model_path)
+        print("✅ Model loaded successfully")
+    except Exception as e:
+        raise RuntimeError(f"Failed to load YOLO model: {e}")
+    
+    # Open video
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+    
+    # Get video properties
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    print(f"📹 Video info: {total_frames} frames, {fps} FPS, {width}x{height}")
+    
+    # Initialize results
+    results = {
+        "video_info": {
+            "path": video_path,
+            "total_frames": total_frames,
+            "fps": fps,
+            "width": width,
+            "height": height
+        },
+        "detection_info": {
+            "model_path": model_path,
+            "confidence_threshold": confidence_threshold,
+            "classes": list(YARD_MARKER_CLASSES.values())
+        },
+        "frames": []
+    }
+    
+    frame_number = 0
+    detections_count = 0
+    
+    print("🔍 Processing frames...")
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Run YOLO detection
+        try:
+            yolo_results = model(frame, conf=confidence_threshold, verbose=False)
+            
+            # Process detections
+            frame_detections = []
+            if yolo_results and len(yolo_results) > 0:
+                result = yolo_results[0]  # Get first (and only) result
+                
+                if result.boxes is not None and len(result.boxes) > 0:
+                    boxes = result.boxes.xyxy.cpu().numpy()  # Get bounding boxes
+                    confidences = result.boxes.conf.cpu().numpy()  # Get confidences
+                    class_ids = result.boxes.cls.cpu().numpy().astype(int)  # Get class IDs
+                    
+                    for i, (box, conf, class_id) in enumerate(zip(boxes, confidences, class_ids)):
+                        # Get class name
+                        class_name = YARD_MARKER_CLASSES.get(class_id, f"unknown_{class_id}")
+                        
+                        # Extract bounding box coordinates
+                        x1, y1, x2, y2 = box
+                        width = x2 - x1
+                        height = y2 - y1
+                        center_x = (x1 + x2) / 2
+                        center_y = (y1 + y2) / 2
+                        
+                        detection = {
+                            "class": class_name,
+                            "class_id": int(class_id),
+                            "confidence": float(conf),
+                            "bbox": {
+                                "x1": float(x1),
+                                "y1": float(y1),
+                                "x2": float(x2),
+                                "y2": float(y2),
+                                "width": float(width),
+                                "height": float(height),
+                                "center_x": float(center_x),
+                                "center_y": float(center_y)
+                            }
+                        }
+                        
+                        frame_detections.append(detection)
+                        detections_count += 1
+            
+            # Store frame results
+            frame_result = {
+                "frame_number": frame_number,
+                "timestamp": frame_number / fps,
+                "detections": frame_detections
+            }
+            
+            results["frames"].append(frame_result)
+            
+            # Progress update
+            if frame_number % 30 == 0:  # Update every 30 frames
+                progress = (frame_number / total_frames) * 100
+                print(f"📊 Progress: {frame_number}/{total_frames} frames ({progress:.1f}%) - {len(frame_detections)} detections")
+            
+            frame_number += 1
+            
+        except Exception as e:
+            print(f"⚠️ Error processing frame {frame_number}: {e}")
+            # Add empty frame result
+            frame_result = {
+                "frame_number": frame_number,
+                "timestamp": frame_number / fps,
+                "detections": []
+            }
+            results["frames"].append(frame_result)
+            frame_number += 1
+            continue
+    
+    # Clean up
+    cap.release()
+    
+    # Add summary statistics
+    results["summary"] = {
+        "total_frames_processed": frame_number,
+        "total_detections": detections_count,
+        "frames_with_detections": len([f for f in results["frames"] if f["detections"]]),
+        "average_detections_per_frame": detections_count / frame_number if frame_number > 0 else 0
+    }
+    
+    print(f"✅ Yard marker detection completed!")
+    print(f"📊 Summary: {detections_count} total detections across {frame_number} frames")
+    print(f"📊 Frames with detections: {results['summary']['frames_with_detections']}")
+    
+    return results
+
+def save_results(results, output_path):
+    """Save detection results to JSON file"""
+    # Create output directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Save to JSON
+    with open(output_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    print(f"💾 Results saved to: {output_path}")
 
 def main():
     """Main function for standalone execution"""
@@ -58,11 +204,29 @@ def main():
     parser.add_argument('--video', type=str, required=True, help='Path to input video file')
     parser.add_argument('--output', type=str, default='cache/yardMarkerDetection.json', 
                        help='Path to output JSON file')
+    parser.add_argument('--model', type=str, default='yolo_models/bestYardMarker.pt',
+                       help='Path to YOLO model file')
+    parser.add_argument('--confidence', type=float, default=0.5,
+                       help='Confidence threshold for detections')
     
     args = parser.parse_args()
     
-    # TODO: Call yardMarkerDetection function and save results
-    pass
+    try:
+        # Run detection
+        results = yardMarkerDetection(
+            video_path=args.video,
+            model_path=args.model,
+            confidence_threshold=args.confidence
+        )
+        
+        # Save results
+        save_results(results, args.output)
+        
+        print("🎉 Yard marker detection completed successfully!")
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
