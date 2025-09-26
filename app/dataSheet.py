@@ -155,40 +155,55 @@ def on_row_selected(parent):
             print(f"Video file not found: {video_file}")
 
 def play_video_clip(parent, video_path, timestamp=None):
-    """Play video at specific timestamp if available"""
-    from PySide6.QtCore import QUrl
+    """Play video at specific timestamp if available using custom video widget"""
+    # Set current video path for bounding box data loading
+    from video import set_current_video_path
+    set_current_video_path(parent, video_path)
     
-    parent.player.setSource(QUrl.fromLocalFile(video_path))
+    # The set_current_video_path function now handles loading the video into the custom widget
+    # and setting up the progress slider and time label
     
-    # Seek to timestamp if provided
-    if timestamp:
+    # Seek to timestamp if provided (for custom video widget)
+    if timestamp and hasattr(parent, 'custom_video'):
         try:
             # Handle different timestamp formats
             if isinstance(timestamp, (int, float)):
-                # Assume milliseconds or seconds
-                position = int(timestamp * 1000) if timestamp < 1000 else int(timestamp)
+                # Assume seconds
+                frame_number = int(timestamp * 30)  # Assume 30 FPS
             elif isinstance(timestamp, str):
                 # Handle time strings like "00:01:30" or "1m30s"
                 if ':' in timestamp:
                     parts = timestamp.split(':')
                     if len(parts) == 3:  # HH:MM:SS
                         hours, minutes, seconds = map(float, parts)
-                        position = int((hours * 3600 + minutes * 60 + seconds) * 1000)
+                        frame_number = int((hours * 3600 + minutes * 60 + seconds) * 30)
                     elif len(parts) == 2:  # MM:SS
                         minutes, seconds = map(float, parts)
-                        position = int((minutes * 60 + seconds) * 1000)
+                        frame_number = int((minutes * 60 + seconds) * 30)
+                    else:
+                        frame_number = 0
                 else:
-                    position = 0
+                    frame_number = 0
             else:
-                position = 0
+                frame_number = 0
                 
-            parent.player.setPosition(position)
+            # Set the frame in the custom video widget
+            parent.custom_video.current_frame = frame_number
+            parent.custom_video.update()
+            
+            # Update progress slider
+            if hasattr(parent, 'custom_video_total_frames'):
+                progress = int((frame_number / parent.custom_video_total_frames) * 100)
+                parent.progress_slider.setValue(progress)
+                
         except (ValueError, TypeError):
-            position = 0
+            frame_number = 0
     
-    parent.play_button.setText("Pause")
-    parent.time_label.setText("00:00 / 00:00")
-    parent.player.play()
+    # Update button text to show it's ready to play
+    parent.play_button.setText("▶")
+    print(f"🎬 Video loaded: {video_path}")
+    if timestamp:
+        print(f"⏰ Seeking to timestamp: {timestamp}")
 
 def create_data_sheet_title_bar(dock, parent):
     """Create a custom title bar for the data sheet dock widget with process button"""
@@ -279,9 +294,9 @@ def create_data_sheet_title_bar(dock, parent):
 
 def process_selected_video(parent):
     """Process the currently selected video file"""
-    import subprocess
     import os
     from PySide6.QtWidgets import QMessageBox
+    from processingDialog import ProcessingDialog
     
     # Get the currently selected row
     selected_indexes = parent.tableView.selectionModel().selectedRows()
@@ -293,33 +308,25 @@ def process_selected_video(parent):
     try:
         video_file, timestamp = parent.csv_model.get_video_info(selected_indexes[0].row())
         
-        # Construct full path to video file
-        video_dir = "testing_data/video"
-        video_path = os.path.join(video_dir, video_file)
+        print(f"DEBUG: Raw video_file from CSV: {video_file}")
+        print(f"DEBUG: parent.current_folder: {getattr(parent, 'current_folder', 'NOT SET')}")
+        
+        # Construct full path to video file (same logic as play_video_clip)
+        if not os.path.isabs(video_file) and hasattr(parent, 'current_folder'):
+            video_path = os.path.join(parent.current_folder, video_file)
+        else:
+            video_path = video_file
+            
+        print(f"Processing video: {video_path}")
+        print(f"Absolute path: {os.path.abspath(video_path)}")
         
         if not os.path.exists(video_path):
             QMessageBox.warning(parent, "File Not Found", f"Video file not found: {video_path}")
             return
         
-        # Show processing message
-        QMessageBox.information(parent, "Processing Started", f"Processing video: {video_file}\nThis may take a few minutes...")
-        
-        # Run the processVideo.py script
-        script_path = "Scripts/processVideo.py"
-        cmd = ["python3", script_path, "--video", video_path]
-        
-        print(f"Running command: {' '.join(cmd)}")
-        
-        # Execute the command
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
-        
-        if result.returncode == 0:
-            QMessageBox.information(parent, "Processing Complete", f"Video processed successfully!\nOutput saved to cache/processed_videos/")
-            print("Processing completed successfully")
-            print(result.stdout)
-        else:
-            QMessageBox.critical(parent, "Processing Failed", f"Error processing video:\n{result.stderr}")
-            print(f"Processing failed: {result.stderr}")
+        # Show the modal processing dialog
+        dialog = ProcessingDialog(parent, video_path)
+        dialog.exec()
             
     except Exception as e:
         QMessageBox.critical(parent, "Error", f"An error occurred: {str(e)}")

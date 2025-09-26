@@ -237,13 +237,17 @@ def create_video_based_csv(folder_path, video_files):
         return None
 
 def open_video_file(parent, video_path):
-    """Open and play a video file"""
-    from PySide6.QtCore import QUrl
-    parent.player.setSource(QUrl.fromLocalFile(video_path))
-    parent.play_button.setText("Pause")
-    parent.time_label.setText("00:00 / 00:00")
-    parent.progress_slider.setValue(0)
-    parent.player.play()
+    """Open and play a video file using custom video widget"""
+    # Set current video path for bounding box data loading
+    from video import set_current_video_path
+    set_current_video_path(parent, video_path)
+    
+    # The set_current_video_path function now handles loading the video into the custom widget
+    # and setting up the progress slider and time label
+    
+    # Update button text to show it's ready to play
+    parent.play_button.setText("▶")
+    print(f"🎬 Video loaded: {video_path}")
 
 def show_context_menu(parent, position):
     index = parent.tree_view.indexAt(position)
