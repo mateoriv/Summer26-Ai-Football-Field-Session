@@ -101,15 +101,19 @@ class CustomVideoWidget(QWidget):
                 
                 # Scale to fit widget
                 scaled_pixmap = pixmap.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                painter.drawPixmap(0, 0, scaled_pixmap)
+                
+                # Center the video in the widget
+                x_offset = (self.width() - scaled_pixmap.width()) // 2
+                y_offset = (self.height() - scaled_pixmap.height()) // 2
+                painter.drawPixmap(x_offset, y_offset, scaled_pixmap)
                 
                 # Draw player bounding boxes if enabled
                 if self.show_boxes and self.detection_data:
-                    self.draw_bounding_boxes(painter, scaled_pixmap.size())
+                    self.draw_bounding_boxes(painter, scaled_pixmap.size(), x_offset, y_offset)
                 
                 # Draw yard marker bounding boxes if enabled
                 if hasattr(self.parent_window, 'show_yard_marker_boxes') and self.parent_window.show_yard_marker_boxes and self.yard_marker_data:
-                    self.draw_yard_marker_boxes(painter, scaled_pixmap.size())
+                    self.draw_yard_marker_boxes(painter, scaled_pixmap.size(), x_offset, y_offset)
             else:
                 # Draw black background if no frame
                 painter.fillRect(self.rect(), QColor(0, 0, 0))
@@ -121,7 +125,7 @@ class CustomVideoWidget(QWidget):
             painter.setPen(QPen(QColor(255, 255, 255), 2))
             painter.drawText(self.rect(), Qt.AlignCenter, "No Video Loaded")
     
-    def draw_bounding_boxes(self, painter, video_size):
+    def draw_bounding_boxes(self, painter, video_size, x_offset=0, y_offset=0):
         """Draw bounding boxes on the video"""
         if not self.detection_data or 'frames' not in self.detection_data:
             return
@@ -137,7 +141,7 @@ class CustomVideoWidget(QWidget):
             scale_y = video_size.height() / 720
             
             for detection in current_detections:
-                self.draw_single_bbox(painter, detection, scale_x, scale_y)
+                self.draw_single_bbox(painter, detection, scale_x, scale_y, x_offset, y_offset)
     
     def get_detections_for_frame(self, frame_number):
         """Get detections for a specific frame number"""
@@ -160,7 +164,7 @@ class CustomVideoWidget(QWidget):
         
         return []
     
-    def draw_single_bbox(self, painter, detection, scale_x, scale_y):
+    def draw_single_bbox(self, painter, detection, scale_x, scale_y, x_offset=0, y_offset=0):
         """Draw a single bounding box"""
         bbox = detection.get('bbox', {})
         if not bbox or 'x1' not in bbox:
@@ -173,8 +177,8 @@ class CustomVideoWidget(QWidget):
         y2 = bbox.get('y2', 0)
         
         # Scale coordinates using provided scaling factors
-        scaled_x = int(x1 * scale_x)
-        scaled_y = int(y1 * scale_y)
+        scaled_x = int(x1 * scale_x) + x_offset
+        scaled_y = int(y1 * scale_y) + y_offset
         scaled_w = int((x2 - x1) * scale_x)
         scaled_h = int((y2 - y1) * scale_y)
         
@@ -189,7 +193,7 @@ class CustomVideoWidget(QWidget):
         painter.setPen(QPen(QColor(255, 255, 255), 1))
         painter.drawText(scaled_x, scaled_y - 5, f"{class_name} {confidence:.2f}")
     
-    def draw_yard_marker_boxes(self, painter, video_size):
+    def draw_yard_marker_boxes(self, painter, video_size, x_offset=0, y_offset=0):
         """Draw yard marker bounding boxes on the video"""
         if not self.yard_marker_data or 'frames' not in self.yard_marker_data:
             return
@@ -205,7 +209,7 @@ class CustomVideoWidget(QWidget):
             scale_y = video_size.height() / 720
             
             for detection in current_detections:
-                self.draw_single_yard_marker_bbox(painter, detection, scale_x, scale_y)
+                self.draw_single_yard_marker_bbox(painter, detection, scale_x, scale_y, x_offset, y_offset)
         else:
             print(f"🏈 No yard marker detections for frame {self.current_frame}")
     
@@ -230,7 +234,7 @@ class CustomVideoWidget(QWidget):
         
         return []
     
-    def draw_single_yard_marker_bbox(self, painter, detection, scale_x, scale_y):
+    def draw_single_yard_marker_bbox(self, painter, detection, scale_x, scale_y, x_offset=0, y_offset=0):
         """Draw a single yard marker bounding box"""
         bbox = detection.get('bbox', {})
         if not bbox or 'x1' not in bbox:
@@ -243,8 +247,8 @@ class CustomVideoWidget(QWidget):
         y2 = bbox.get('y2', 0)
         
         # Scale coordinates using provided scaling factors
-        scaled_x = int(x1 * scale_x)
-        scaled_y = int(y1 * scale_y)
+        scaled_x = int(x1 * scale_x) + x_offset
+        scaled_y = int(y1 * scale_y) + y_offset
         scaled_w = int((x2 - x1) * scale_x)
         scaled_h = int((y2 - y1) * scale_y)
         
