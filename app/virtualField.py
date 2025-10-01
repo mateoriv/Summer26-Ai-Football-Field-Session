@@ -9,7 +9,7 @@ import os
 # Add Scripts directory to path to import field drawing functions
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Scripts'))
 
-def draw_field(ax):
+def draw_field(ax, correspondence_points=None):
     """Draw a college football field to scale (yards) - from drawPlayers.py"""
     import matplotlib.patches as patches
     
@@ -64,6 +64,73 @@ def draw_field(ax):
     ax.set_ylim(0, FIELD_WIDTH)
     ax.set_aspect('equal')
     ax.axis('off')
+    
+    # Draw yard marker dots if correspondence points are provided
+    if correspondence_points:
+        draw_yard_marker_dots(ax, correspondence_points)
+
+def draw_yard_marker_dots(ax, correspondence_points=None):
+    """
+    Draw white dots on the field to show yard marker positions
+    
+    Args:
+        ax: Matplotlib axes object
+        correspondence_points: List of correspondence points with field coordinates
+    """
+    if not correspondence_points:
+        return
+    
+    # Field dimensions (in yards for plotting)
+    FIELD_LENGTH = 120.0  # 120 yards
+    FIELD_WIDTH = 160.0 / 3.0  # ~53.33 yards
+    
+    for point in correspondence_points:
+        field_coords = point.get('field_point', {})
+        marker_info = point.get('yard_marker_info', {})
+        
+        # Convert feet to yards for plotting
+        x_yards = field_coords.get('x', 0) / 3.0  # Convert feet to yards
+        y_yards = field_coords.get('y', 0) / 3.0  # Convert feet to yards
+        
+        # Draw white dot
+        ax.plot(x_yards, y_yards, 'wo', markersize=8, markeredgecolor='black', 
+                markeredgewidth=1, zorder=10)
+        
+        # Add label
+        label = marker_info.get('label', '')
+        ax.text(x_yards, y_yards + 2, label, color='white', fontsize=8, 
+                ha='center', va='bottom', zorder=11, 
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
+
+def update_field_with_correspondence_points(parent, correspondence_file):
+    """
+    Update the virtual field to show yard marker dots from correspondence points
+    
+    Args:
+        parent: Main window parent
+        correspondence_file: Path to correspondence points JSON file
+    """
+    import json
+    
+    try:
+        if os.path.exists(correspondence_file):
+            with open(correspondence_file, 'r') as f:
+                correspondence_data = json.load(f)
+            
+            correspondence_points = correspondence_data.get('correspondences', [])
+            
+            # Clear and redraw field with yard marker dots
+            if hasattr(parent, 'field_axes'):
+                parent.field_axes.clear()
+                draw_field(parent.field_axes, correspondence_points)
+                parent.field_canvas.draw()
+                
+                print(f"✅ Updated virtual field with {len(correspondence_points)} yard marker dots")
+        else:
+            print(f"❌ Correspondence file not found: {correspondence_file}")
+            
+    except Exception as e:
+        print(f"❌ Error updating field with correspondence points: {e}")
 
 def toggle_scoreboard(parent, button):
     """Toggle scoreboard visibility"""

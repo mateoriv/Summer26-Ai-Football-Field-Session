@@ -97,11 +97,38 @@ class ProcessingWorker(QThread):
                     self.step_completed.emit("Yard Marker Detection", False)
                     
             elif self.current_step == 2:
-                # Step 3: Homography Transformation
-                self.progress_updated.emit(0, "Step 3: Initializing homography transformation...")
-                self.output_received.emit("Step 3: Checking for homography transformation...")
+                # Step 3: Auto Correspondence Points
+                self.progress_updated.emit(0, "Step 3: Initializing correspondence points generation...")
+                self.output_received.emit("Step 3: Generating correspondence points from yard markers...")
                 
-                correspondence_file = "cache/correspondence/correspondencePoints.json"
+                yard_marker_output = f"{self.output_dir}/{self.video_name}_yard_markers.json"
+                correspondence_output = f"{self.output_dir}/{self.video_name}_correspondence.json"
+                
+                correspondence_cmd = [
+                    "python3", "Scripts/autoCorrespondancePoints.py",
+                    "--detection-json", yard_marker_output,
+                    "--output", correspondence_output,
+                    "--confidence", "0.7"
+                ]
+                
+                if self.is_cancelled:
+                    return
+                    
+                result = self._run_command(correspondence_cmd, "Correspondence Points Generation", 0, 100)
+                if result:
+                    # Update virtual field with yard marker dots
+                    from virtualField import update_field_with_correspondence_points
+                    update_field_with_correspondence_points(self.parent(), correspondence_output)
+                    self.step_completed.emit("Correspondence Points Generation", True)
+                else:
+                    self.step_completed.emit("Correspondence Points Generation", False)
+                    
+            elif self.current_step == 3:
+                # Step 4: Homography Transformation
+                self.progress_updated.emit(0, "Step 4: Initializing homography transformation...")
+                self.output_received.emit("Step 4: Running homography transformation...")
+                
+                correspondence_file = f"{self.output_dir}/{self.video_name}_correspondence.json"
                 
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running homography transformation...")
@@ -125,10 +152,10 @@ class ProcessingWorker(QThread):
                     self.output_received.emit("No correspondence points found, skipping homography transformation")
                     self.step_completed.emit("Homography Transformation", False)
                     
-            elif self.current_step == 3:
-                # Step 4: Render Field Video
-                self.progress_updated.emit(0, "Step 4: Initializing field video rendering...")
-                self.output_received.emit("Step 4: Rendering field video...")
+            elif self.current_step == 4:
+                # Step 5: Render Field Video
+                self.progress_updated.emit(0, "Step 5: Initializing field video rendering...")
+                self.output_received.emit("Step 5: Rendering field video...")
                 
                 if self.homography_output and os.path.exists(self.homography_output):
                     field_video_output = f"{self.output_dir}/{self.video_name}_field.mp4"
@@ -280,7 +307,7 @@ class ProcessingDialog(QDialog):
         self.video_path = video_path
         self.worker = None
         self.current_step = 0
-        self.step_names = ["Player Detection", "Yard Marker Detection", "Homography Transformation", "Field Video Rendering"]
+        self.step_names = ["Player Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation", "Field Video Rendering"]
         self.progress_timer = QTimer()
         self.progress_timer.timeout.connect(self.update_progress_timer)
         self.setup_ui()
