@@ -127,10 +127,22 @@ def initialize_empty_tree_view(parent):
 
 def on_tree_clicked(parent, index):
     """Handle single click on tree view items - load folder content but don't change tree view"""
-    if parent.tree_model.isDir(index):
+    if parent.tree_model.isDir(index) and has_mp4(parent.tree_model.filePath(index)):
         path = parent.tree_model.filePath(index)
         load_folder(parent, path, change_view=False)
         # Don't change the tree view expansion state
+    else:
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.warning(parent, "No MP4 Files", "This folder does not contain any MP4 files.")
+
+def has_mp4(folder_path: str) -> bool:
+    """Return True if the folder contains at least one .mp4 file."""
+    if not os.path.isdir(folder_path):
+        return False
+    for f in os.listdir(folder_path):
+        if f.lower().endswith(".mp4") and os.path.isfile(os.path.join(folder_path, f)):
+            return True
+    return False
 
 def on_tree_double_clicked(parent, index):
     """Handle double click on tree view items - expand/collapse folders only"""
