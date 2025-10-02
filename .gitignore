@@ -13,6 +13,7 @@
 # Output files
 output_detection.mp4
 output_*.mp4
+cache/**/*.json
 
 # Image files
 *.jpg
