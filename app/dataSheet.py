@@ -143,7 +143,8 @@ def on_row_selected(parent):
     
     row = selected_indexes[0].row()
     video_file, timestamp = parent.csv_model.get_video_info(row)
-    
+    print(f"Video file: {video_file}")
+    video_file = video_file + ".mp4"
     if video_file:
         # Construct full path if the video file is relative
         if not os.path.isabs(video_file) and hasattr(parent, 'current_folder'):
@@ -313,19 +314,21 @@ def process_selected_video(parent):
         
         # Construct full path to video file (same logic as play_video_clip)
         if not os.path.isabs(video_file) and hasattr(parent, 'current_folder'):
+            print(f"Constructing full path to video file: {video_file}")
             video_path = os.path.join(parent.current_folder, video_file)
         else:
+            print(f"Using absolute path to video file: {video_file}")
             video_path = video_file
-            
+        video_path2 = video_path + ".mp4"
         print(f"Processing video: {video_path}")
         print(f"Absolute path: {os.path.abspath(video_path)}")
         
-        if not os.path.exists(video_path):
-            QMessageBox.warning(parent, "File Not Found", f"Video file not found: {video_path}")
+        if not os.path.exists(video_path2):
+            QMessageBox.warning(parent, "File Not Found", f"Video file not found: {video_path2}")
             return
         
         # Show the modal processing dialog
-        dialog = ProcessingDialog(parent, video_path)
+        dialog = ProcessingDialog(parent, video_path2)
         dialog.exec()
             
     except Exception as e:
