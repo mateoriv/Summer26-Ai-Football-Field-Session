@@ -58,7 +58,7 @@ class ProcessingWorker(QThread):
                 self.progress_updated.emit(0, "Step 1: Initializing player detection...")
                 self.output_received.emit("Step 1: Running player detection...")
                 
-                self.detection_output = f"{self.output_dir}/{self.video_folder}/{self.video_name}_detection.json"
+                self.detection_output = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
                 detection_cmd = [
                     "python3", "Scripts/playerDetection.py", 
                     "--video", self.video_path, 
@@ -84,7 +84,7 @@ class ProcessingWorker(QThread):
                 self.progress_updated.emit(0, "Step 2: Initializing yard marker detection...")
                 self.output_received.emit("Step 2: Running yard marker detection...")
                 
-                yard_marker_output = f"{self.output_dir}/{self.video_folder}/{self.video_name}_yard_markers.json"
+                yard_marker_output = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
                 yard_marker_cmd = [
                     "python3", "Scripts/yardMarkerDetection.py",
                     "--video", self.video_path,
@@ -105,8 +105,8 @@ class ProcessingWorker(QThread):
                 self.progress_updated.emit(0, "Step 3: Initializing correspondence points generation...")
                 self.output_received.emit("Step 3: Generating correspondence points from yard markers...")
                 
-                yard_marker_output = f"{self.output_dir}/{self.video_folder}/{self.video_name}_yard_markers.json"
-                correspondence_output = f"{self.output_dir}/{self.video_folder}/{self.video_name}_correspondence.json"
+                yard_marker_output = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
+                correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
                 
                 correspondence_cmd = [
                     "python3", "Scripts/autoCorrespondancePoints.py",
@@ -132,7 +132,7 @@ class ProcessingWorker(QThread):
                 self.progress_updated.emit(0, "Step 4: Initializing homography transformation...")
                 self.output_received.emit("Step 4: Running homography transformation...")
                 
-                correspondence_file = f"{self.output_dir}/{self.video_folder}/{self.video_name}_correspondence.json"
+                correspondence_file = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
                 
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running homography transformation...")
@@ -162,7 +162,7 @@ class ProcessingWorker(QThread):
                 self.output_received.emit("Step 5: Rendering field video...")
                 
                 if self.homography_output and os.path.exists(self.homography_output):
-                    field_video_output = f"{self.output_dir}/{self.video_folder}/{self.video_name}_field.mp4"
+                    field_video_output = f"{self.output_dir}/{self.video_folder}/virtual_field/{self.video_name}_field.mp4"
                     render_cmd = [
                         "python3", "Scripts/renderFieldVideo.py",
                         "--input", self.homography_output,
@@ -191,7 +191,7 @@ class ProcessingWorker(QThread):
                         }
                         
                         # Save results to JSON
-                        results_file = f"{self.output_dir}/{self.video_folder}/{self.video_name}_results.json"
+                        results_file = f"{self.output_dir}/{self.video_folder}/results/{self.video_name}_results.json"
                         with open(results_file, 'w') as f:
                             json.dump(results, f, indent=2)
                         

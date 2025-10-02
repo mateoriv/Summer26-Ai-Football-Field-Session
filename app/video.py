@@ -1472,7 +1472,7 @@ def load_detection_data_for_current_video(parent):
     
     # Get the project root directory (two levels up from app/)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    detection_file = os.path.join(project_root, "cache",  parent.current_folder, f"{video_name}_detection.json")
+    detection_file = os.path.join(project_root, "cache",  parent.current_folder, "players", f"{video_name}_detection.json")
     
     print(f"Looking for detection file: {detection_file}")
     print(f"File exists: {os.path.exists(detection_file)}")
@@ -1508,7 +1508,7 @@ def load_detection_data_for_custom_video(parent):
     
     # Get the project root directory (two levels up from app/)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    detection_file = os.path.join(project_root, "cache",  os.path.basename(parent.current_folder),  f"{video_name}_detection.json")
+    detection_file = os.path.join(project_root, "cache",  os.path.basename(parent.current_folder), "players", f"{video_name}_detection.json")
     
     print(f"🔍 Looking for detection file: {detection_file}")
     
@@ -1555,7 +1555,7 @@ def load_yard_marker_data_for_custom_video(parent):
     
     # Get the project root directory (two levels up from app/)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    yard_marker_file = os.path.join(project_root, "cache",  os.path.basename(parent.current_folder),  f"{video_name}_yard_markers.json")
+    yard_marker_file = os.path.join(project_root, "cache",  os.path.basename(parent.current_folder), "yard_markers", f"{video_name}_yard_markers.json")
     
     print(f"🔍 Looking for yard marker detection file: {yard_marker_file}")
     
