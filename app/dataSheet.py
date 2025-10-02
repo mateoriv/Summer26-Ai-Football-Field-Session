@@ -319,7 +319,10 @@ def process_selected_video(parent):
         else:
             print(f"Using absolute path to video file: {video_file}")
             video_path = video_file
-        video_path = video_path + ".mp4"
+
+        if not video_path.lower().endswith(".mp4"):
+            video_path += ".mp4"
+
         print(f"Processing video: {video_path}")
         print(f"Absolute path: {os.path.abspath(video_path)}")
         
