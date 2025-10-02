@@ -319,16 +319,16 @@ def process_selected_video(parent):
         else:
             print(f"Using absolute path to video file: {video_file}")
             video_path = video_file
-        video_path2 = video_path + ".mp4"
+        video_path = video_path + ".mp4"
         print(f"Processing video: {video_path}")
         print(f"Absolute path: {os.path.abspath(video_path)}")
         
-        if not os.path.exists(video_path2):
-            QMessageBox.warning(parent, "File Not Found", f"Video file not found: {video_path2}")
+        if not os.path.exists(video_path):
+            QMessageBox.warning(parent, "File Not Found", f"Video file not found: {video_path}")
             return
         
         # Show the modal processing dialog
-        dialog = ProcessingDialog(parent, video_path2)
+        dialog = ProcessingDialog(parent, video_path, parent.current_folder)
         dialog.exec()
             
     except Exception as e:
