@@ -84,13 +84,16 @@ def create_file_dock(parent):
 
     # Tree view for navigation
     parent.tree_model = QFileSystemModel()
-    parent.tree_model.setRootPath("")
+    
     parent.tree_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files)
     
     parent.tree_view = QTreeView()
     parent.tree_view.setModel(parent.tree_model)
-    parent.tree_view.setRootIndex(parent.tree_model.index(""))
+    # Don't set a root index initially - will be set when a folder is loaded
     parent.tree_view.setHeaderHidden(True)
+    parent.tree_view.setVisible(False)
+    # Initialize with empty state - no folder loaded
+    initialize_empty_tree_view(parent)
     
     # Single click loads the folder content but doesn't change tree view
     parent.tree_view.clicked.connect(lambda index: on_tree_clicked(parent, index))
@@ -115,6 +118,12 @@ def create_file_dock(parent):
     parent.open_video_file = lambda video_path: open_video_file(parent, video_path)
 
     return dock
+
+def initialize_empty_tree_view(parent):
+    """Initialize tree view with empty state when no folder is loaded"""
+    # Hide the tree view when no folder is loaded
+    parent.tree_view.setVisible(False)
+    print("📁 Tree view hidden - no folder loaded")
 
 def on_tree_clicked(parent, index):
     """Handle single click on tree view items - load folder content but don't change tree view"""
@@ -151,8 +160,14 @@ def load_folder(parent, folder_path, change_view=False):
     
     # Change the tree view only if explicitly requested (from Open Folder button)
     if change_view:
+        # Set the root path for the model first
+        parent.tree_model.setRootPath(folder_path)
         tree_index = parent.tree_model.index(folder_path)
         parent.tree_view.setRootIndex(tree_index)
+        
+        # Make the tree view visible when a folder is loaded
+        parent.tree_view.setVisible(True)
+        print(f"📁 Tree view updated and made visible for: {folder_path}")
     
     # Auto-load first CSV and first video in the folder
     auto_load_folder_content(parent, folder_path)
@@ -213,7 +228,6 @@ def create_video_based_csv(folder_path, video_files):
         # Create default data structure with video names as the first column
         default_data = {
             'Clip Name': video_names,
-            'Video File': video_files,  # Actual filenames with extensions
             'Timestamp': ['00:00:00'] * len(video_files),
             'Player': [''] * len(video_files),
             'Action': [''] * len(video_files),

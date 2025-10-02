@@ -51,12 +51,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(clear_default_folder_action)
         
         file_menu.addSeparator()
-        
-        # Add Open Video action
-        open_video_action = QAction("Open Video", self)
-        open_video_action.triggered.connect(self.open_video)
-        file_menu.addAction(open_video_action)
-
+    
         export_action = QAction("Export", self)
         export_action.triggered.connect(self.export_data)
         file_menu.addAction(export_action)
@@ -106,26 +101,6 @@ class MainWindow(QMainWindow):
         window_menu.addAction("Light", lambda: app.setPalette(get_light_palette()))
         window_menu.addAction("Dark", lambda: app.setPalette(get_dark_palette()))
         window_menu.addAction("System", lambda: apply_system_theme(app))
-
-    def create_dock(self, title):
-        dock = QDockWidget(title, self)
-        dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
-        dock.setTitleBarWidget(QWidget())
-
-        widget = QWidget()
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel(f"{title} content here"))
-        widget.setLayout(layout)
-
-        widget.setStyleSheet("""
-            QWidget {
-                border: 2px solid #888;
-            }
-        """)
-
-        dock.setWidget(widget)
-        return dock
 
     def open_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Open Folder")

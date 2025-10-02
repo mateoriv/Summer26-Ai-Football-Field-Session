@@ -10,7 +10,7 @@ class CSVTableModel(QAbstractTableModel):
         self._data = data if data is not None else pd.DataFrame()
         self.video_clip_column = None
         self.video_time_column = None
-        self.empty_message = "No data available. Double-click to add rows."
+        self.empty_message = "No data available."
 
     def rowCount(self, parent=QModelIndex()):
         if self._data.empty:

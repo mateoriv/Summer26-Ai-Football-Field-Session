@@ -136,9 +136,32 @@ class CustomVideoWidget(QWidget):
         if current_detections:
             print(f"🎨 Drawing {len(current_detections)} bounding boxes for frame {self.current_frame}")
             
+            # Get actual video resolution from detection data or infer from coordinates
+            video_width = 1280  # Default fallback
+            video_height = 720
+            
+            if self.detection_data and 'video_info' in self.detection_data:
+                video_info = self.detection_data['video_info']
+                if 'width' in video_info and 'height' in video_info:
+                    video_width = video_info['width']
+                    video_height = video_info['height']
+                else:
+                    # Try to infer resolution from bounding box coordinates
+                    max_x = max_y = 0
+                    for frame in self.detection_data.get('frames', []):
+                        for det in frame.get('detections', []):
+                            bbox = det.get('bbox', {})
+                            max_x = max(max_x, bbox.get('x2', 0))
+                            max_y = max(max_y, bbox.get('y2', 0))
+                    
+                    if max_x > 1280:  # Likely 1920x1080
+                        video_width = 1920
+                        video_height = 1080
+                        print(f"🔍 Inferred video resolution: {video_width}x{video_height}")
+            
             # Calculate scaling factors
-            scale_x = video_size.width() / 1280  # Assume original video is 1280x720
-            scale_y = video_size.height() / 720
+            scale_x = video_size.width() / video_width
+            scale_y = video_size.height() / video_height
             
             for detection in current_detections:
                 self.draw_single_bbox(painter, detection, scale_x, scale_y)

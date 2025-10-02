@@ -26,15 +26,20 @@ def playerDetection(video_path, model_path="yolo_models/bestPlayerDetectorM.pt",
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"Processing video: {video_path}")
     print(f"FPS: {fps}, Total frames: {total_frames}")
+    print(f"Resolution: {width}x{height}")
 
     # Initialize results structure
     results = {
         "video_info": {
             "path": video_path,
             "fps": fps,
-            "total_frames": total_frames
+            "total_frames": total_frames,
+            "width": width,
+            "height": height
         },
         "frames": []
     }

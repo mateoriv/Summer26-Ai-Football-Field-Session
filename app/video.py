@@ -136,9 +136,35 @@ class CustomVideoWidget(QWidget):
         if current_detections:
             print(f"🎨 Drawing {len(current_detections)} bounding boxes for frame {self.current_frame}")
             
-            # Calculate scaling factors
-            scale_x = video_size.width() / 1280  # Assume original video is 1280x720
-            scale_y = video_size.height() / 720
+            # Get actual video resolution from detection data or infer from coordinates
+            video_width = 1280  # Default fallback
+            video_height = 720
+            
+            if self.detection_data and 'video_info' in self.detection_data:
+                video_info = self.detection_data['video_info']
+                if 'width' in video_info and 'height' in video_info:
+                    video_width = video_info['width']
+                    video_height = video_info['height']
+                    print(f"🎯 Using video resolution from detection data: {video_width}x{video_height}")
+                else:
+                    # Try to infer resolution from bounding box coordinates
+                    max_x = max_y = 0
+                    for frame in self.detection_data.get('frames', []):
+                        for det in frame.get('detections', []):
+                            bbox = det.get('bbox', {})
+                            max_x = max(max_x, bbox.get('x2', 0))
+                            max_y = max(max_y, bbox.get('y2', 0))
+                    
+                    if max_x > 1280:  # Likely 1920x1080
+                        video_width = 1920
+                        video_height = 1080
+                        print(f"🔍 Inferred video resolution from coordinates: {video_width}x{video_height} (max coords: {max_x:.0f}, {max_y:.0f})")
+                    else:
+                        print(f"⚠️ Using default resolution: {video_width}x{video_height}")
+            
+            # Calculate scaling factors based on actual video resolution
+            scale_x = video_size.width() / video_width
+            scale_y = video_size.height() / video_height
             
             for detection in current_detections:
                 self.draw_single_bbox(painter, detection, scale_x, scale_y, x_offset, y_offset)
@@ -204,9 +230,19 @@ class CustomVideoWidget(QWidget):
         if current_detections:
             print(f"🏈 Drawing {len(current_detections)} yard marker boxes for frame {self.current_frame}")
             
+            # Get actual video resolution from detection data
+            video_width = 1280  # Default fallback
+            video_height = 720
+            
+            if self.yard_marker_data and 'video_info' in self.yard_marker_data:
+                video_info = self.yard_marker_data['video_info']
+                if 'width' in video_info and 'height' in video_info:
+                    video_width = video_info['width']
+                    video_height = video_info['height']
+            
             # Calculate scaling factors
-            scale_x = video_size.width() / 1280  # Assume original video is 1280x720
-            scale_y = video_size.height() / 720
+            scale_x = video_size.width() / video_width
+            scale_y = video_size.height() / video_height
             
             for detection in current_detections:
                 self.draw_single_yard_marker_bbox(painter, detection, scale_x, scale_y, x_offset, y_offset)
@@ -409,8 +445,31 @@ class SimpleOverlayWidget(QWidget):
         
         # Scale bounding box to widget size
         widget_rect = self.rect()
-        scale_x = widget_rect.width() / 1280  # Assume 1280x720 video
-        scale_y = widget_rect.height() / 720
+        
+        # Get actual video resolution from detection data or infer from coordinates
+        video_width = 1280  # Default fallback
+        video_height = 720
+        
+        if self.detection_data and 'video_info' in self.detection_data:
+            video_info = self.detection_data['video_info']
+            if 'width' in video_info and 'height' in video_info:
+                video_width = video_info['width']
+                video_height = video_info['height']
+            else:
+                # Try to infer resolution from bounding box coordinates
+                max_x = max_y = 0
+                for frame in self.detection_data.get('frames', []):
+                    for det in frame.get('detections', []):
+                        bbox = det.get('bbox', {})
+                        max_x = max(max_x, bbox.get('x2', 0))
+                        max_y = max(max_y, bbox.get('y2', 0))
+                
+                if max_x > 1280:  # Likely 1920x1080
+                    video_width = 1920
+                    video_height = 1080
+        
+        scale_x = widget_rect.width() / video_width
+        scale_y = widget_rect.height() / video_height
         
         scaled_x = int(x1 * scale_x)
         scaled_y = int(y1 * scale_y)
@@ -517,7 +576,7 @@ class BoundingBoxGraphicsView(QGraphicsView):
         
         # Create graphics scene
         self.scene = QGraphicsScene()
-        self.scene.setSceneRect(0, 0, 1280, 720)  # Set initial scene size
+        self.scene.setSceneRect(0, 0, 1280, 720)  # Initial scene size (will be updated when detection data is loaded)
         self.setScene(self.scene)
         
         # Set up the view
@@ -553,7 +612,20 @@ class BoundingBoxGraphicsView(QGraphicsView):
                 print(f"   Sample frame numbers: {frame_numbers}")
                 if len(data['frames']) > 10:
                     last_frame = data['frames'][-1]
-                    print(f"   Last frame number: {last_frame.get('frame_number', 0)}")
+                    
+        # Update scene size based on video resolution if available
+        if data and 'video_info' in data:
+            video_info = data['video_info']
+            if 'width' in video_info and 'height' in video_info:
+                video_width = video_info['width']
+                video_height = video_info['height']
+                self.scene.setSceneRect(0, 0, video_width, video_height)
+                print(f"🔧 Updated scene size to video resolution: {video_width}x{video_height}")
+                    
+        # Print last frame info if available
+        if data and 'frames' in data and data['frames'] and len(data['frames']) > 10:
+            last_frame = data['frames'][-1]
+            print(f"   Last frame number: {last_frame.get('frame_number', 0)}")
         
         # Force a repaint to show bounding boxes immediately
         self.update()
@@ -672,13 +744,29 @@ class BoundingBoxGraphicsView(QGraphicsView):
         # Scale bounding box to widget size
         widget_rect = self.rect()
         
-        # Try to get video resolution from detection data, fallback to common resolutions
+        # Get actual video resolution from detection data or infer from coordinates
         video_width = 1280  # Default fallback
         video_height = 720
         
         if self.detection_data and 'video_info' in self.detection_data:
-            # Try to extract resolution from video path or other info
-            pass  # For now, use defaults
+            video_info = self.detection_data['video_info']
+            if 'width' in video_info and 'height' in video_info:
+                video_width = video_info['width']
+                video_height = video_info['height']
+                print(f"🎯 BoundingBoxGraphicsView using video resolution: {video_width}x{video_height}")
+            else:
+                # Try to infer resolution from bounding box coordinates
+                max_x = max_y = 0
+                for frame in self.detection_data.get('frames', []):
+                    for det in frame.get('detections', []):
+                        bbox = det.get('bbox', {})
+                        max_x = max(max_x, bbox.get('x2', 0))
+                        max_y = max(max_y, bbox.get('y2', 0))
+                
+                if max_x > 1280:  # Likely 1920x1080
+                    video_width = 1920
+                    video_height = 1080
+                    print(f"🔍 BoundingBoxGraphicsView inferred video resolution: {video_width}x{video_height}")
         
         # Calculate scaling factors
         scale_x = widget_rect.width() / video_width
