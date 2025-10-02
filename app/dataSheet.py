@@ -145,9 +145,9 @@ def on_row_selected(parent):
     video_file, timestamp = parent.csv_model.get_video_info(row)
     print(f"Video file: {video_file}")
 
-    if not video_path.lower().endswith(".mp4"):
-            video_path += ".mp4"
-            
+    if not video_file.lower().endswith(".mp4"):
+            video_file += ".mp4"
+
     if video_file:
         # Construct full path if the video file is relative
         if not os.path.isabs(video_file) and hasattr(parent, 'current_folder'):
