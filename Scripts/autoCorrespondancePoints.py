@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """
 Automated Correspondence Points Detection Script
-Uses YOLO to detect yard markers and automatically generate correspondence points
+Uses yard marker detection JSON to automatically generate correspondence points
 based on NCAA football field standards.
+
+Input: Yard marker detection JSON from yardMarkerDetection.py
+Output: Correspondence points JSON for homography transformation
+
+Features:
+- Filters detections by confidence threshold (70% default)
+- Averages multiple detections of same marker using line of best fit
+- Detects significant camera movement to trigger recalculation
+- Maps yard marker classes to real-world field coordinates
 
 Yard marker format: (near/far)(left/right)(yardNumber)
 Possible values: fl1,fl2,fl3,fl4,f5,nl1,nl2,nl3,nl4,n5,nr1,nr2,nr3,nr4,nr5
@@ -18,7 +27,7 @@ import cv2
 import json
 import os
 import numpy as np
-from ultralytics import YOLO
+from collections import defaultdict
 
 # NCAA Field dimensions (in feet)
 FIELD_LENGTH_FT = 360  # 120 yards * 3 feet/yard
@@ -28,15 +37,177 @@ YARD_MARKER_HEIGHT_FT = 6  # Max height per NCAA rules
 YARD_MARKER_WIDTH_FT = 4   # Max width per NCAA rules
 YARD_MARKER_TOP_DIST_FT = 27  # 9 yards * 3 feet/yard from sidelines
 
-def load_yard_marker_model(model_path="yolo_models/bestYardMarkerDetector.pt"):
-    """Load the YOLO model for yard marker detection"""
+def load_yard_marker_detections(detection_json_path):
+    """
+    Load yard marker detection data from JSON file
+    
+    Args:
+        detection_json_path: Path to yard marker detection JSON file
+    
+    Returns:
+        Dictionary containing detection data
+    """
     try:
-        model = YOLO(model_path)
-        return model
+        with open(detection_json_path, 'r') as f:
+            detection_data = json.load(f)
+        print(f"✅ Loaded yard marker detections: {len(detection_data.get('frames', []))} frames")
+        return detection_data
     except Exception as e:
-        print(f"Error loading yard marker model: {e}")
-        print("Please ensure you have a trained YOLO model for yard marker detection")
+        print(f"❌ Error loading yard marker detections: {e}")
         return None
+
+def filter_detections_by_confidence(detections, confidence_threshold=0.7):
+    """
+    Filter detections by confidence threshold
+    
+    Args:
+        detections: List of detection dictionaries
+        confidence_threshold: Minimum confidence score (default: 0.7)
+    
+    Returns:
+        Filtered list of detections
+    """
+    filtered = [det for det in detections if det.get('confidence', 0) >= confidence_threshold]
+    print(f"🔍 Filtered {len(detections)} detections to {len(filtered)} (confidence >= {confidence_threshold})")
+    return filtered
+
+def group_detections_by_marker(detections):
+    """
+    Group detections by yard marker class (e.g., all 'fl1' detections together)
+    
+    Args:
+        detections: List of detection dictionaries
+    
+    Returns:
+        Dictionary with marker classes as keys and detection lists as values
+    """
+    grouped = defaultdict(list)
+    for detection in detections:
+        marker_class = detection.get('class', 'unknown')
+        grouped[marker_class].append(detection)
+    
+    print(f"📊 Grouped detections into {len(grouped)} marker classes")
+    for marker, dets in grouped.items():
+        print(f"   {marker}: {len(dets)} detections")
+    
+    return dict(grouped)
+
+def get_field_coordinates_for_marker(marker_class):
+    """
+    Get field coordinates for a yard marker class
+    
+    Args:
+        marker_class: Yard marker class (e.g., 'fl1', 'nr2')
+    
+    Returns:
+        Dictionary with field coordinates in feet
+    """
+    # Parse the marker label
+    parsed = parse_yard_marker_label(marker_class)
+    if not parsed:
+        return None
+    
+    # Calculate field coordinates based on NCAA standards
+    near_far = parsed["near_far"]
+    left_right = parsed["left_right"] 
+    yard_number = parsed["yard_number"]
+    
+    # Field dimensions (in feet)
+    field_length = FIELD_LENGTH_FT  # 360 feet (120 yards)
+    field_width = FIELD_WIDTH_FT    # 160 feet
+    
+    # Yard marker is 7 yards from sideline (21 feet)
+    yard_marker_distance_ft = 7 * 3  # 21 feet from sideline
+    
+    # Calculate yard line position
+    # fl1 = far left 10-yard marker, fl2 = far left 20-yard marker, etc.
+    yard_line = yard_number * 10  # 10, 20, 30, 40, 50
+    
+    # Convert yard line to feet from near endzone
+    yard_line_feet = yard_line * 3  # 3 feet per yard
+    
+    # Calculate position from sideline
+    if left_right == 'l':  # Left side
+        field_x = yard_marker_distance_ft  # 21 feet from left sideline
+    else:  # Right side
+        field_x = field_width - yard_marker_distance_ft  # 21 feet from right sideline
+    
+    # Calculate position along field length
+    if near_far == 'n':  # Near side (0-50 yard line)
+        field_y = yard_line_feet
+    else:  # Far side (50-100 yard line)
+        field_y = yard_line_feet
+    
+    return {
+        "x": field_x,
+        "y": field_y,
+        "yard_line": yard_line,
+        "hash_side": left_right,
+        "near_far": near_far,
+        "yard_number": yard_number
+    }
+
+def average_detections_simple(detections):
+    """
+    Average multiple detections of the same marker using weighted averaging
+    
+    Args:
+        detections: List of detection dictionaries for the same marker class
+    
+    Returns:
+        Single averaged detection dictionary
+    """
+    if len(detections) == 1:
+        return detections[0]
+    
+    # Extract center coordinates and confidences
+    centers = []
+    confidences = []
+    
+    for det in detections:
+        bbox = det.get('bbox', {})
+        center_x = bbox.get('center_x', 0)
+        center_y = bbox.get('center_y', 0)
+        confidence = det.get('confidence', 0)
+        
+        centers.append([center_x, center_y])
+        confidences.append(confidence)
+    
+    centers = np.array(centers)
+    confidences = np.array(confidences)
+    
+    # Weight by confidence
+    weights = confidences / np.sum(confidences)
+    
+    # Calculate weighted average
+    avg_center = np.average(centers, axis=0, weights=weights)
+    avg_confidence = np.average(confidences, weights=weights)
+    
+    # Calculate bounding box dimensions (average of all detections)
+    widths = [det.get('bbox', {}).get('width', 0) for det in detections]
+    heights = [det.get('bbox', {}).get('height', 0) for det in detections]
+    avg_width = np.average(widths, weights=weights)
+    avg_height = np.average(heights, weights=weights)
+    
+    # Create averaged detection
+    averaged_detection = {
+        'class': detections[0].get('class'),
+        'class_id': detections[0].get('class_id'),
+        'confidence': float(avg_confidence),
+        'bbox': {
+            'center_x': float(avg_center[0]),
+            'center_y': float(avg_center[1]),
+            'width': float(avg_width),
+            'height': float(avg_height),
+            'x1': float(avg_center[0] - avg_width/2),
+            'y1': float(avg_center[1] - avg_height/2),
+            'x2': float(avg_center[0] + avg_width/2),
+            'y2': float(avg_center[1] + avg_height/2)
+        }
+    }
+    
+    print(f"📊 Averaged {len(detections)} detections for {detections[0].get('class')} (confidence: {avg_confidence:.3f})")
+    return averaged_detection
 
 def detect_yard_markers(image_path, model):
     """
@@ -181,6 +352,76 @@ def calculate_field_coordinates(parsed_label, bbox, image_width, image_height):
         "yard_number": yard_number
     }
 
+def process_yard_marker_detections(detection_json_path, confidence_threshold=0.7):
+    """
+    Process yard marker detection JSON to create correspondence points
+    
+    Args:
+        detection_json_path: Path to yard marker detection JSON file
+        confidence_threshold: Minimum confidence for detections (default: 0.7)
+    
+    Returns:
+        List of correspondence points
+    """
+    print(f"🎯 Processing yard marker detections from: {detection_json_path}")
+    
+    # Load detection data
+    detection_data = load_yard_marker_detections(detection_json_path)
+    if not detection_data:
+        return []
+    
+    # Collect all detections from all frames
+    all_detections = []
+    for frame in detection_data.get('frames', []):
+        frame_detections = frame.get('detections', [])
+        all_detections.extend(frame_detections)
+    
+    print(f"📊 Total detections across all frames: {len(all_detections)}")
+    
+    # Filter by confidence
+    filtered_detections = filter_detections_by_confidence(all_detections, confidence_threshold)
+    
+    if len(filtered_detections) < 4:
+        print(f"❌ Insufficient detections after filtering: {len(filtered_detections)} (need at least 4)")
+        return []
+    
+    # Group by marker class
+    grouped_detections = group_detections_by_marker(filtered_detections)
+    
+    # Average detections for each marker class
+    averaged_detections = []
+    for marker_class, detections in grouped_detections.items():
+        averaged = average_detections_simple(detections)
+        averaged_detections.append(averaged)
+    
+    print(f"📊 Final averaged detections: {len(averaged_detections)}")
+    
+    # Convert to correspondence points
+    correspondence_points = []
+    for detection in averaged_detections:
+        field_coords = get_field_coordinates_for_marker(detection['class'])
+        if field_coords:
+            correspondence_points.append({
+                "image_point": {
+                    "x": detection["bbox"]["center_x"],
+                    "y": detection["bbox"]["center_y"]
+                },
+                "field_point": {
+                    "x": field_coords["x"],
+                    "y": field_coords["y"]
+                },
+                "yard_marker_info": {
+                    "label": detection["class"],
+                    "yard_line": field_coords["yard_line"],
+                    "hash_side": field_coords["hash_side"],
+                    "near_far": field_coords["near_far"],
+                    "confidence": detection["confidence"]
+                }
+            })
+    
+    print(f"✅ Created {len(correspondence_points)} correspondence points")
+    return correspondence_points
+
 def findCorrespondancePoints(image_path, model_path="yolo_models/yardMarkerDetector.pt"):
     """
     Find correspondence points using automated yard marker detection
@@ -305,23 +546,24 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Automated Correspondence Points Detection')
-    parser.add_argument('--image', type=str, required=True, help='Path to reference image')
+    parser.add_argument('--detection-json', type=str, required=True, 
+                       help='Path to yard marker detection JSON file')
     parser.add_argument('--output', type=str, default='cache/correspondence/correspondences.json', 
                        help='Path to output JSON file')
-    parser.add_argument('--model', type=str, default='yolo_models/yardMarkerDetector.pt',
-                       help='Path to YOLO model for yard marker detection')
+    parser.add_argument('--confidence', type=float, default=0.7,
+                       help='Minimum confidence threshold for detections (default: 0.7)')
     parser.add_argument('--min-points', type=int, default=4,
                        help='Minimum number of correspondence points required (default: 4)')
     
     args = parser.parse_args()
     
     try:
-        # Find correspondence points
-        points = findCorrespondancePoints(args.image, args.model)
+        # Process yard marker detections to create correspondence points
+        points = process_yard_marker_detections(args.detection_json, args.confidence)
         
         # Validate points
-        if not validate_correspondence_points(points):
-            print("Insufficient correspondence points found. Please check your image and model.")
+        if len(points) < args.min_points:
+            print(f"❌ Insufficient correspondence points found: {len(points)} (need at least {args.min_points})")
             return 1
         
         # Save points

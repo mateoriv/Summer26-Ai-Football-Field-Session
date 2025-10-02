@@ -1,0 +1,145 @@
+{
+  "correspondences": [
+    {
+      "image_point": {
+        "x": 82.66863010632089,
+        "y": 396.1525394794937
+      },
+      "field_point": {
+        "x": 21,
+        "y": 60
+      },
+      "yard_marker_info": {
+        "label": "nl2",
+        "yard_line": 20,
+        "hash_side": "l",
+        "confidence": 0.8876859699997355
+      }
+    },
+    {
+      "image_point": {
+        "x": 312.204767415153,
+        "y": 58.190350326805316
+      },
+      "field_point": {
+        "x": 21,
+        "y": 30
+      },
+      "yard_marker_info": {
+        "label": "fl1",
+        "yard_line": 10,
+        "hash_side": "l",
+        "confidence": 0.8830667174107361
+      }
+    },
+    {
+      "image_point": {
+        "x": 665.5381595426478,
+        "y": 486.3473380275247
+      },
+      "field_point": {
+        "x": 21,
+        "y": 120
+      },
+      "yard_marker_info": {
+        "label": "nl4",
+        "yard_line": 40,
+        "hash_side": "l",
+        "confidence": 0.8807408605099223
+      }
+    },
+    {
+      "image_point": {
+        "x": 370.9354203592565,
+        "y": 438.23723224293366
+      },
+      "field_point": {
+        "x": 21,
+        "y": 90
+      },
+      "yard_marker_info": {
+        "label": "nl3",
+        "yard_line": 30,
+        "hash_side": "l",
+        "confidence": 0.879648338811749
+      }
+    },
+    {
+      "image_point": {
+        "x": 482.82992003531507,
+        "y": 78.22419440472522
+      },
+      "field_point": {
+        "x": 21,
+        "y": 60
+      },
+      "yard_marker_info": {
+        "label": "fl2",
+        "yard_line": 20,
+        "hash_side": "l",
+        "confidence": 0.8250227238597099
+      }
+    },
+    {
+      "image_point": {
+        "x": 843.4736899264052,
+        "y": 113.73717448638241
+      },
+      "field_point": {
+        "x": 21,
+        "y": 120
+      },
+      "yard_marker_info": {
+        "label": "fl4",
+        "yard_line": 40,
+        "hash_side": "l",
+        "confidence": 0.7945369237914066
+      }
+    },
+    {
+      "image_point": {
+        "x": 656.9279438704623,
+        "y": 96.74965412967609
+      },
+      "field_point": {
+        "x": 21,
+        "y": 90
+      },
+      "yard_marker_info": {
+        "label": "fl3",
+        "yard_line": 30,
+        "hash_side": "l",
+        "confidence": 0.73427396417093
+      }
+    },
+    {
+      "image_point": {
+        "x": 419.4609680175781,
+        "y": 585.1304931640625
+      },
+      "field_point": {
+        "x": 139,
+        "y": 30
+      },
+      "yard_marker_info": {
+        "label": "nr1",
+        "yard_line": 10,
+        "hash_side": "r",
+        "confidence": 0.7358778119087219
+      }
+    }
+  ],
+  "metadata": {
+    "total_points": 8,
+    "field_dimensions": {
+      "length_ft": 360,
+      "width_ft": 160,
+      "hash_distance_ft": 40
+    },
+    "ncaa_standards": {
+      "yard_marker_height_ft": 6,
+      "yard_marker_width_ft": 4,
+      "yard_marker_top_distance_ft": 27
+    }
+  }
+}
