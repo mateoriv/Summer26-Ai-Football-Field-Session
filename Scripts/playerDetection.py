@@ -93,8 +93,8 @@ def playerDetection(video_path, model_path="yolo_models/bestPlayerDetectorM.pt",
             "detections": detections
         })
 
-        if frame_number % 50 == 0:
-            print(f"Processed frame {frame_number}/{total_frames}")
+        if frame_number % 5 == 0:
+            print(f"Processed frame {frame_number}/{total_frames}", flush=True)
 
         frame_number += 1
 

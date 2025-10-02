@@ -150,9 +150,9 @@ def yardMarkerDetection(video_path, model_path="yolo_models/bestYardMarkerAccura
             results["frames"].append(frame_result)
             
             # Progress update
-            if frame_number % 30 == 0:  # Update every 30 frames
+            if frame_number % 5 == 0:  # Update every 30 frames
                 progress = (frame_number / total_frames) * 100
-                print(f"📊 Progress: {frame_number}/{total_frames} frames ({progress:.1f}%) - {len(frame_detections)} detections")
+                print(f"📊 Progress: {frame_number}/{total_frames} frames ({progress:.1f}%) - {len(frame_detections)} detections", flush=True)
             
             frame_number += 1
             
