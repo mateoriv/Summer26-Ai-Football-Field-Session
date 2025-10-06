@@ -9,7 +9,7 @@ import sys
 import os
 import json
 import darkdetect
-from video import create_video_dock
+from video import create_video_dock, set_current_video_path
 from fileAccess import create_file_dock
 from dataSheet import create_data_sheet_dock
 from virtualField import create_virtual_field_dock
@@ -52,9 +52,9 @@ class MainWindow(QMainWindow):
         
         file_menu.addSeparator()
     
-        export_action = QAction("Export", self)
-        export_action.triggered.connect(self.export_data)
-        file_menu.addAction(export_action)
+        # export_action = QAction("Export", self)
+        # export_action.triggered.connect(self.export_data)
+        # file_menu.addAction(export_action)
 
         close_action = QAction("Close", self)
         close_action.triggered.connect(self.close)
@@ -112,16 +112,16 @@ class MainWindow(QMainWindow):
             load_folder(self, folder, change_view=True)
 
     def open_video(self):
-        video_file, _ = QFileDialog.getOpenFileName(
-            self, "Open Video", self.current_folder or "", "Video Files (*.mp4 *.avi *.mov *.mkv *.wmv)"
-        )
-        if video_file:
-            # Call the video method to open the file
-            if hasattr(self, 'open_video_file'):
-                self.open_video_file(video_file)
+            video_file, _ = QFileDialog.getOpenFileName(
+                self, "Open Video", self.current_folder or "", "Video Files (*.mp4 *.avi *.mov *.mkv *.wmv)"
+            )
+            if video_file:
+                # Call the correct utility function to load the video,
+                # which then handles loading the custom video widget and detection data.
+                set_current_video_path(self, video_file)
 
-    def export_data(self):
-        print("Exporting data... (stub)")
+    # def export_data(self):
+    #     print("Exporting data... (stub)")
     
     def toggle_scoreboard(self):
         """Toggle scoreboard visibility in the virtual field dock"""
@@ -159,15 +159,10 @@ class MainWindow(QMainWindow):
                     default_folder = settings.get('default_folder', '')
                     if default_folder and os.path.exists(default_folder):
                         self.current_folder = default_folder
-                        print(f"📁 Loaded default folder: {default_folder}")
                         # Auto-load the default folder
                         self.load_default_folder()
-                    else:
-                        print("📁 No valid default folder found")
-            else:
-                print("📁 No settings file found")
         except Exception as e:
-            print(f"❌ Error loading settings: {e}")
+            print(f"Error loading settings: {e}")
     
     def save_settings(self):
         """Save application settings to file"""
@@ -175,43 +170,32 @@ class MainWindow(QMainWindow):
             settings = {
                 'default_folder': self.current_folder
             }
-            print(f"🔧 Saving to file: {self.settings_file}")
-            print(f"🔧 Settings content: {settings}")
             with open(self.settings_file, 'w') as f:
                 json.dump(settings, f, indent=2)
-            print(f"💾 Settings saved: default_folder = {self.current_folder}")
         except Exception as e:
-            print(f"❌ Error saving settings: {e}")
+            print(f"Error saving settings: {e}")
     
     def set_default_folder(self):
         """Set the current folder as the default folder"""
-        print(f"🔍 Current folder: {self.current_folder}")
         if self.current_folder and os.path.exists(self.current_folder):
-            print(f"💾 Saving settings for folder: {self.current_folder}")
             self.save_settings()
-            print(f"✅ Default folder set to: {self.current_folder}")
         else:
-            print("❌ No valid folder selected. Please open a folder first.")
+            print("No valid folder selected. Please open a folder first.")
     
     def clear_default_folder(self):
         """Clear the default folder setting"""
         self.current_folder = ""
         self.save_settings()
-        print("🗑️ Default folder cleared")
     
     def load_default_folder(self):
         """Load the default folder if it exists"""
         if self.current_folder and os.path.exists(self.current_folder):
-            print(f"📂 Attempting to load default folder: {self.current_folder}")
             # Import the load_folder function from fileAccess
             from fileAccess import load_folder
             try:
                 load_folder(self, self.current_folder, change_view=True)
-                print(f"✅ Successfully loaded default folder: {self.current_folder}")
             except Exception as e:
-                print(f"❌ Error loading default folder: {e}")
-        else:
-            print("❌ No valid default folder to load")
+                print(f"Error loading default folder: {e}")
 
 
 def apply_system_theme(app):

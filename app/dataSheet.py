@@ -131,7 +131,6 @@ def load_csv_file(parent, csv_path):
     if parent.csv_model.load_csv(csv_path):
         parent.tableView.resizeColumnsToContents()
         parent.current_csv_path = csv_path  # Store current CSV path for refresh
-        print(f"Loaded CSV: {csv_path}")
         return True
     return False
 
@@ -143,7 +142,6 @@ def on_row_selected(parent):
     
     row = selected_indexes[0].row()
     video_file, timestamp = parent.csv_model.get_video_info(row)
-    print(f"Video file: {video_file}")
 
     if not video_file.lower().endswith(".mp4"):
             video_file += ".mp4"
@@ -205,9 +203,6 @@ def play_video_clip(parent, video_path, timestamp=None):
     
     # Update button text to show it's ready to play
     parent.play_button.setText("▶")
-    print(f"🎬 Video loaded: {video_path}")
-    if timestamp:
-        print(f"⏰ Seeking to timestamp: {timestamp}")
 
 def create_data_sheet_title_bar(dock, parent):
     """Create a custom title bar for the data sheet dock widget with process button"""
@@ -312,22 +307,16 @@ def process_selected_video(parent):
     try:
         video_file, timestamp = parent.csv_model.get_video_info(selected_indexes[0].row())
         
-        print(f"DEBUG: Raw video_file from CSV: {video_file}")
-        print(f"DEBUG: parent.current_folder: {getattr(parent, 'current_folder', 'NOT SET')}")
-        
         # Construct full path to video file (same logic as play_video_clip)
         if not os.path.isabs(video_file) and hasattr(parent, 'current_folder'):
-            print(f"Constructing full path to video file: {video_file}")
             video_path = os.path.join(parent.current_folder, video_file)
         else:
-            print(f"Using absolute path to video file: {video_file}")
             video_path = video_file
 
         if not video_path.lower().endswith(".mp4"):
             video_path += ".mp4"
 
         print(f"Processing video: {video_path}")
-        print(f"Absolute path: {os.path.abspath(video_path)}")
         
         if not os.path.exists(video_path):
             QMessageBox.warning(parent, "File Not Found", f"Video file not found: {video_path}")

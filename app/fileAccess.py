@@ -123,7 +123,6 @@ def initialize_empty_tree_view(parent):
     """Initialize tree view with empty state when no folder is loaded"""
     # Hide the tree view when no folder is loaded
     parent.tree_view.setVisible(False)
-    print("📁 Tree view hidden - no folder loaded")
 
 def on_tree_clicked(parent, index):
     """Handle single click on tree view items - load folder content but don't change tree view"""
@@ -179,7 +178,6 @@ def load_folder(parent, folder_path, change_view=False):
         
         # Make the tree view visible when a folder is loaded
         parent.tree_view.setVisible(True)
-        print(f"📁 Tree view updated and made visible for: {folder_path}")
     
     # Auto-load first CSV and first video in the folder
     auto_load_folder_content(parent, folder_path)
@@ -208,16 +206,12 @@ def auto_load_folder_content(parent, folder_path):
             first_csv = os.path.join(folder_path, csv_files[0])
             parent.load_csv_file(first_csv)
             print(f"Loaded CSV: {csv_files[0]}")
-        else:
-            print("No CSV files available")
         
         # Load and play first video if available
         if video_files and hasattr(parent, 'open_video_file'):
             first_video = os.path.join(folder_path, video_files[0])
             parent.open_video_file(first_video)
             print(f"Playing video: {video_files[0]}")
-        else:
-            print("No video files found in folder")
             
     except Exception as e:
         print(f"Error auto-loading folder content: {e}")
@@ -273,7 +267,7 @@ def open_video_file(parent, video_path):
     
     # Update button text to show it's ready to play
     parent.play_button.setText("▶")
-    print(f"🎬 Video loaded: {video_path}")
+    print(f"Video loaded: {video_path}")
 
 def show_context_menu(parent, position):
     index = parent.tree_view.indexAt(position)

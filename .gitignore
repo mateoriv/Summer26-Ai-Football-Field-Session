@@ -54,3 +54,6 @@ env/
 # Application settings (user-specific)
 app_settings.json
 .hudl_ai_settings.json
+
+
+Experimentation/

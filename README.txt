@@ -6,7 +6,7 @@ Text file storing necessary dependecies
 
 
 ---Scripts----------
-Primary Scripts are stored in the Scripts folder
+Primary scripts are stored in the scripts folder
 
 
 

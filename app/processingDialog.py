@@ -64,9 +64,9 @@ class ProcessingWorker(QThread):
             # Get total frame count for accurate progress tracking
             self.total_frames = self.get_video_frame_count()
             if self.total_frames > 0:
-                self.output_received.emit(f"📊 Video has {self.total_frames} frames")
+                self.output_received.emit(f"Video has {self.total_frames} frames")
             else:
-                self.output_received.emit("⚠️ Could not determine video frame count, using estimated progress")
+                self.output_received.emit("Could not determine video frame count, using estimated progress")
             
             # Ensure output directory exists
             os.makedirs(self.output_dir, exist_ok=True)
@@ -86,7 +86,7 @@ class ProcessingWorker(QThread):
                 
                 self.detection_output = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
                 detection_cmd = [
-                    "python3", "Scripts/playerDetection.py", 
+                    "python3", "scripts/playerDetection.py", 
                     "--video", self.video_path, 
                     "--output", self.detection_output
                 ]
@@ -112,7 +112,7 @@ class ProcessingWorker(QThread):
                 
                 yard_marker_output = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
                 yard_marker_cmd = [
-                    "python3", "Scripts/yardMarkerDetection.py",
+                    "python3", "scripts/yardMarkerDetection.py",
                     "--video", self.video_path,
                     "--output", yard_marker_output
                 ]
@@ -135,7 +135,7 @@ class ProcessingWorker(QThread):
                 correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
                 
                 correspondence_cmd = [
-                    "python3", "Scripts/autoCorrespondancePoints.py",
+                    "python3", "scripts/autoCorrespondancePoints.py",
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
                     "--confidence", "0.7"
@@ -164,7 +164,7 @@ class ProcessingWorker(QThread):
                     self.output_received.emit("Correspondence points found, running homography transformation...")
                     self.homography_output = f"{self.output_dir}/{self.video_folder}/{self.video_name}_homography.json"
                     homography_cmd = [
-                        "python3", "Scripts/homographyTransform.py",
+                        "python3", "scripts/homographyTransform.py",
                         "--input", self.detection_output,
                         "--correspondence", correspondence_file,
                         "--output", self.homography_output
@@ -190,7 +190,7 @@ class ProcessingWorker(QThread):
                 if self.homography_output and os.path.exists(self.homography_output):
                     field_video_output = f"{self.output_dir}/{self.video_folder}/virtual_field/{self.video_name}_field.mp4"
                     render_cmd = [
-                        "python3", "Scripts/renderFieldVideo.py",
+                        "python3", "scripts/renderFieldVideo.py",
                         "--input", self.homography_output,
                         "--output", field_video_output
                     ]
@@ -328,16 +328,16 @@ class ProcessingWorker(QThread):
             
             if return_code == 0:
                 self.progress_updated.emit(progress_end, f"{step_name} completed successfully")
-                self.output_received.emit(f"✅ {step_name} completed successfully")
+                self.output_received.emit(f"{step_name} completed successfully")
                 return True
             else:
-                self.output_received.emit(f"❌ {step_name} failed with return code {return_code}")
+                self.output_received.emit(f"{step_name} failed with return code {return_code}")
                 self.output_received.emit(f"Command: {' '.join(cmd)}")
                 self.output_received.emit(f"Working directory: {project_root}")
                 return False
                 
         except Exception as e:
-            self.output_received.emit(f"❌ Error running {step_name}: {str(e)}")
+            self.output_received.emit(f"Error running {step_name}: {str(e)}")
             self.output_received.emit(f"Command: {' '.join(cmd)}")
             self.output_received.emit(f"Working directory: {project_root}")
             return False
@@ -644,13 +644,11 @@ class ProcessingDialog(QDialog):
         self.progress_timer.stop()
         
         if success:
-            self.add_output(f"✅ {step_name} completed successfully!")
-            self.add_output(f"DEBUG: Enabling Next button...")
+            self.add_output(f"{step_name} completed successfully!")
             self.next_button.setEnabled(True)
             self.next_button.setText(f"Next: {self.get_next_step_name()}")
-            self.add_output(f"DEBUG: Next button enabled: {self.next_button.isEnabled()}")
         else:
-            self.add_output(f"❌ {step_name} failed!")
+            self.add_output(f"{step_name} failed!")
             self.next_button.setEnabled(False)
             self.next_button.setText("Next Step")
     
@@ -678,7 +676,7 @@ class ProcessingDialog(QDialog):
         self.progress_timer.stop()  # Stop the progress timer
         self.progress_bar.setValue(100)
         self.status_label.setText("Processing completed successfully!")
-        self.add_output("\n🎉 Processing completed successfully!")
+        self.add_output("\nProcessing completed successfully!")
         self.add_output(f"Results saved to: {results.get('field_video_output', 'N/A')}")
         
         # Show close button and hide other buttons
@@ -693,7 +691,7 @@ class ProcessingDialog(QDialog):
         """Handle processing failure"""
         self.progress_timer.stop()  # Stop the progress timer
         self.status_label.setText("Processing failed!")
-        self.add_output(f"\n❌ Processing failed: {error_message}")
+        self.add_output(f"\nProcessing failed: {error_message}")
         
         # Show close button and hide other buttons
         self.cancel_button.setVisible(False)
@@ -711,7 +709,7 @@ class ProcessingDialog(QDialog):
             self.worker.wait()
         
         self.status_label.setText("Processing cancelled")
-        self.add_output("\n⚠️ Processing cancelled by user")
+        self.add_output("\nProcessing cancelled by user")
         
         # Show close button and hide other buttons
         self.cancel_button.setVisible(False)

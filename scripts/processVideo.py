@@ -33,7 +33,7 @@ def process_video(video_path, output_dir="cache/processed_videos"):
     # Step 1: Player Detection
     print("Step 1: Running player detection...")
     detection_output = f"{output_dir}/{video_name}_detection.json"
-    detection_cmd = ["python3", "Scripts/playerDetection.py", "--video", video_path, "--output", detection_output]
+    detection_cmd = ["python3", "scripts/playerDetection.py", "--video", video_path, "--output", detection_output]
     print(f"Running: {' '.join(detection_cmd)}")
     
     try:
@@ -50,7 +50,7 @@ def process_video(video_path, output_dir="cache/processed_videos"):
     if os.path.exists(correspondence_file):
         print("Correspondence points found, running homography transformation...")
         homography_output = f"{output_dir}/{video_name}_homography.json"
-        homography_cmd = ["python3", "Scripts/homographyTransform.py", "--input", detection_output, "--correspondence", correspondence_file, "--output", homography_output]
+        homography_cmd = ["python3", "scripts/homographyTransform.py", "--input", detection_output, "--correspondence", correspondence_file, "--output", homography_output]
         print(f"Running: {' '.join(homography_cmd)}")
         
         try:
@@ -68,7 +68,7 @@ def process_video(video_path, output_dir="cache/processed_videos"):
     if homography_output and os.path.exists(homography_output):
         print("Step 3: Rendering field video...")
         field_video_output = f"{output_dir}/{video_name}_field.mp4"
-        render_cmd = ["python3", "Scripts/renderFieldVideo.py", "--input", homography_output, "--output", field_video_output]
+        render_cmd = ["python3", "scripts/renderFieldVideo.py", "--input", homography_output, "--output", field_video_output]
         print(f"Running: {' '.join(render_cmd)}")
         
         try:

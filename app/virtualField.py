@@ -6,8 +6,8 @@ from matplotlib.figure import Figure
 import sys
 import os
 
-# Add Scripts directory to path to import field drawing functions
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Scripts'))
+# Add scripts directory to path to import field drawing functions
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 
 def draw_field(ax, correspondence_points=None):
     """Draw a college football field to scale (yards) - from drawPlayers.py"""
@@ -125,12 +125,11 @@ def update_field_with_correspondence_points(parent, correspondence_file):
                 draw_field(parent.field_axes, correspondence_points)
                 parent.field_canvas.draw()
                 
-                print(f"✅ Updated virtual field with {len(correspondence_points)} yard marker dots")
         else:
-            print(f"❌ Correspondence file not found: {correspondence_file}")
+            print(f"Correspondence file not found: {correspondence_file}")
             
     except Exception as e:
-        print(f"❌ Error updating field with correspondence points: {e}")
+        print(f"Error updating field with correspondence points: {e}")
 
 def toggle_scoreboard(parent, button):
     """Toggle scoreboard visibility"""
