@@ -24,11 +24,6 @@ As the name suggest this folder is purely for experimentation and unused feature
 Folder that stores various yolo_models
 
 
----git large file system-----
-
-Due to the size of some of the yolo model files you may need to use gits large file system to push to repo. Git Large File Storage
-uses text pointers to store the data in the repo. You can see more at this link: https://git-lfs.github.com.
-
 
 
 
