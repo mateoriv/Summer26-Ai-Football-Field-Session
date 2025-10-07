@@ -85,13 +85,18 @@ def create_file_dock(parent):
     # Tree view for navigation
     parent.tree_model = QFileSystemModel()
     
-    parent.tree_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files)
+    # Only show directories, no files
+    parent.tree_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
     
     parent.tree_view = QTreeView()
     parent.tree_view.setModel(parent.tree_model)
     # Don't set a root index initially - will be set when a folder is loaded
     parent.tree_view.setHeaderHidden(True)
     parent.tree_view.setVisible(False)
+    
+    # Disable expansion triangles and folder expansion
+    parent.tree_view.setRootIsDecorated(False)
+    parent.tree_view.setItemsExpandable(False)
     # Initialize with empty state - no folder loaded
     initialize_empty_tree_view(parent)
     
@@ -101,8 +106,7 @@ def create_file_dock(parent):
     # Double click expands/collapses folders in the tree view
     parent.tree_view.doubleClicked.connect(lambda index: on_tree_double_clicked(parent, index))
     
-    parent.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
-    parent.tree_view.customContextMenuRequested.connect(lambda pos: show_context_menu(parent, pos))
+
     
     # Hide all columns except Name
     parent.tree_view.setColumnHidden(1, True)
@@ -126,10 +130,10 @@ def initialize_empty_tree_view(parent):
 
 def on_tree_clicked(parent, index):
     """Handle single click on tree view items - load folder content but don't change tree view"""
-    if parent.tree_model.isDir(index) and has_mp4(parent.tree_model.filePath(index)):
-        path = parent.tree_model.filePath(index)
+    # Since we only show directories now, we can directly check for MP4 files
+    path = parent.tree_model.filePath(index)
+    if has_mp4(path):
         load_folder(parent, path, change_view=False)
-        # Don't change the tree view expansion state
     else:
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.warning(parent, "No MP4 Files", "This folder does not contain any MP4 files.")
@@ -144,27 +148,10 @@ def has_mp4(folder_path: str) -> bool:
     return False
 
 def on_tree_double_clicked(parent, index):
-    """Handle double click on tree view items - expand/collapse folders only"""
-    if parent.tree_model.isDir(index):
-        # Toggle expansion state (expand if collapsed, collapse if expanded)
-        if parent.tree_view.isExpanded(index):
-            parent.tree_view.collapse(index)
-        else:
-            parent.tree_view.expand(index)
-    else:
-        # Handle file double-click (for videos and CSVs)
-        file_path = parent.tree_model.filePath(index)
-        file_info = QFileInfo(file_path)
-        
-        if file_info.isFile():
-            file_ext = file_info.suffix().lower()
-            
-            if file_ext in ['mp4', 'avi', 'mov', 'mkv', 'wmv']:
-                open_video_file(parent, file_path)
-            elif file_ext == 'csv':
-                # Load CSV into data sheet
-                if hasattr(parent, 'load_csv_file'):
-                    parent.load_csv_file(file_path)
+    """Handle double click on tree view items - load folder content"""
+    # Since we only show directories and expansion is disabled, 
+    # double-click should do the same as single for now
+    on_tree_clicked(parent, index)
 
 def load_folder(parent, folder_path, change_view=False):
     parent.current_folder = folder_path
@@ -269,30 +256,7 @@ def open_video_file(parent, video_path):
     parent.play_button.setText("▶")
     print(f"Video loaded: {video_path}")
 
-def show_context_menu(parent, position):
-    index = parent.tree_view.indexAt(position)
-    if not index.isValid():
-        return
 
-    menu = QMenu()
-    
-    if parent.tree_model.isDir(index):
-        open_action = menu.addAction("Open (Change View)")
-        open_action.triggered.connect(lambda: load_folder(parent, parent.tree_model.filePath(index), change_view=True))
-        
-        open_no_view_action = menu.addAction("Open (Keep View)")
-        open_no_view_action.triggered.connect(lambda: load_folder(parent, parent.tree_model.filePath(index), change_view=False))
-        
-        # Add option to create new CSV
-        create_csv_action = menu.addAction("Create Data Sheet")
-        create_csv_action.triggered.connect(
-            lambda: create_video_based_csv_from_folder(parent, parent.tree_model.filePath(index))
-        )
-    else:
-        open_action = menu.addAction("Open")
-        open_action.triggered.connect(lambda: on_tree_double_clicked(parent, index))
-    
-    menu.exec(parent.tree_view.viewport().mapToGlobal(position))
 
 def create_video_based_csv_from_folder(parent, folder_path):
     """Create CSV from folder for context menu"""

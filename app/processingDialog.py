@@ -318,7 +318,7 @@ class ProcessingWorker(QThread):
                         bootup_progress = min(1, elapsed_time / 30.0)
                         progress =  bootup_progress * 25
                         
-                        if elapsed_time > 2:  # Show bootup progress after 2 seconds
+                        if elapsed_time > 10:  # Show bootup progress after 2 seconds
                             self.output_received.emit(f"Initializing {step_name}... ({bootup_progress*100:.1f}%)")
                     
                     self.progress_updated.emit(int(progress), f"{step_name} in progress...")
