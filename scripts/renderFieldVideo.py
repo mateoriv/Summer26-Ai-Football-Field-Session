@@ -72,11 +72,9 @@ def get_track_color(track_id, max_tracks=20):
     return colors[track_id % len(colors)]
 
 def plot_frame(ax, frame, radius_yd=0.6, show_labels=False):
-    """Plot players in a single frame."""
-    # Handle both 'tracked' and 'detections' data structures
-    detections = frame.get('detections', [])
-    if not detections and 'tracked' in frame:
-        detections = frame['tracked']
+    """Plot players in a single frame using normalized positions."""
+    # Get normalized positions for this frame
+    normalized_positions = frame.get('normalized_positions', [])
     
     # Clear previous player circles
     for patch in ax.patches:
@@ -88,24 +86,18 @@ def plot_frame(ax, frame, radius_yd=0.6, show_labels=False):
             text.remove()
     
     count = 0
-    for i, detection in enumerate(detections):
-        # Check if we have field coordinates (homography data) or bbox coordinates
-        if 'field_coords' in detection:
-            # Use field coordinates directly (already in feet)
-            x_ft = detection['field_coords']['x']
-            y_ft = detection['field_coords']['y']
-        else:
-            # Use bbox coordinates (pixel coordinates that need conversion)
-            bbox = detection['bbox']
-            x = bbox['center_x']
-            y = bbox['y2']  # Use bottom of bbox
-            x_ft, y_ft = x, y  # Assume already in feet if no field_coords
+    for i, player in enumerate(normalized_positions):
+        # Get normalized position (already in yards)
+        pos = player.get('normalized_position', {})
+        x_yards = pos.get('x', 0)
+        y_yards = pos.get('y', 0)
         
-        # Convert to yards for plotting
-        x_yd, y_yd = feet_to_yards(x_ft, y_ft)
+        # Skip if coordinates are invalid
+        if x_yards < 0 or x_yards > FIELD_LENGTH or y_yards < 0 or y_yards > FIELD_WIDTH:
+            continue
         
-        # Correct for endzone offset
-        x_yd += 10.0   # shift everything forward 10 yards
+        # Use normalized position directly (already in yards)
+        x_yd, y_yd = x_yards, y_yards
         
         # Use a single color for all players to avoid flashing
         color = 'red'  # or 'blue', 'yellow', etc.
@@ -127,10 +119,10 @@ def plot_frame(ax, frame, radius_yd=0.6, show_labels=False):
 def create_field_video(input_json, output_video, fps=30, radius_yd=0.6, show_labels=False, 
                       frame_skip=1, max_frames=None):
     """
-    Create a video showing players moving on the digital field
+    Create a video showing players moving on the digital field using normalized positions
     
     Args:
-        input_json: Path to tracked players JSON file
+        input_json: Path to normalized positions JSON file
         output_video: Path to output video file
         fps: Frames per second for output video
         radius_yd: Radius of player circles in yards
@@ -143,9 +135,21 @@ def create_field_video(input_json, output_video, fps=30, radius_yd=0.6, show_lab
     with open(input_json, 'r') as f:
         data = json.load(f)
     
-    frames = data.get('frames', [])
-    if not frames:
-        raise ValueError("No frames found in JSON input.")
+    # Get normalized positions data
+    normalized_positions = data.get('normalized_positions', {})
+    total_frames = data.get('total_frames', 0)
+    
+    if not normalized_positions:
+        raise ValueError("No normalized positions found in JSON input.")
+    
+    # Convert to frame list format for compatibility
+    frames = []
+    for frame_num in range(total_frames):
+        frame_data = {
+            'frame_number': frame_num,
+            'normalized_positions': normalized_positions.get(str(frame_num), [])
+        }
+        frames.append(frame_data)
     
     # Apply frame skipping and max frames
     if frame_skip > 1:

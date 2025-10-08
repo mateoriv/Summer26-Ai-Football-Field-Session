@@ -50,10 +50,10 @@ def load_yard_marker_detections(detection_json_path):
     try:
         with open(detection_json_path, 'r') as f:
             detection_data = json.load(f)
-        print(f"✅ Loaded yard marker detections: {len(detection_data.get('frames', []))} frames")
+        print(f"Loaded yard marker detections: {len(detection_data.get('frames', []))} frames")
         return detection_data
     except Exception as e:
-        print(f"❌ Error loading yard marker detections: {e}")
+        print(f"Error loading yard marker detections: {e}")
         return None
 
 def filter_detections_by_confidence(detections, confidence_threshold=0.7):
@@ -68,7 +68,6 @@ def filter_detections_by_confidence(detections, confidence_threshold=0.7):
         Filtered list of detections
     """
     filtered = [det for det in detections if det.get('confidence', 0) >= confidence_threshold]
-    print(f"🔍 Filtered {len(detections)} detections to {len(filtered)} (confidence >= {confidence_threshold})")
     return filtered
 
 def group_detections_by_marker(detections):
@@ -85,10 +84,6 @@ def group_detections_by_marker(detections):
     for detection in detections:
         marker_class = detection.get('class', 'unknown')
         grouped[marker_class].append(detection)
-    
-    print(f"📊 Grouped detections into {len(grouped)} marker classes")
-    for marker, dets in grouped.items():
-        print(f"   {marker}: {len(dets)} detections")
     
     return dict(grouped)
 
@@ -206,7 +201,7 @@ def average_detections_simple(detections):
         }
     }
     
-    print(f"📊 Averaged {len(detections)} detections for {detections[0].get('class')} (confidence: {avg_confidence:.3f})")
+    print(f"Averaged {len(detections)} detections for {detections[0].get('class')} (confidence: {avg_confidence:.3f})")
     return averaged_detection
 
 def detect_yard_markers(image_path, model):
@@ -324,24 +319,25 @@ def calculate_field_coordinates(parsed_label, bbox, image_width, image_height):
     left_right = parsed_label["left_right"]
     
     # Calculate expected yard line position
+    # nr1 = 10-yard marker, nr2 = 20-yard marker, etc.
+    # fr1 = 10-yard marker, fr2 = 20-yard marker, etc.
     if yard_number == 5:  # Special case for 5-yard markers
         expected_yard_line = 5 if near_far == 'n' else 115  # Near 5 or far 5
     else:
-        # Regular yard markers (1-4)
-        if near_far == 'n':  # Near side
-            expected_yard_line = 10 + yard_number * 10  # 20, 30, 40, 50
-        else:  # Far side
-            expected_yard_line = 70 + yard_number * 10  # 80, 90, 100, 110
+        # Regular yard markers (1-4) - the number IS the yard line
+        expected_yard_line = yard_number * 10  # 1→10, 2→20, 3→30, 4→40
     
     # Calculate expected hash mark position
-    if left_right == 'l':  # Left hash
-        expected_hash_y = HASH_DISTANCE_FT
-    else:  # Right hash
-        expected_hash_y = FIELD_WIDTH_FT - HASH_DISTANCE_FT
+    # All markers are 9 yards (27 feet) from their respective sideline
+    if near_far == 'n':  # Near side markers - 9 yards from bottom sideline
+        expected_hash_y = 27  # 9 yards * 3 feet/yard = 27 feet from bottom
+    else:  # Far side markers - 9 yards from top sideline  
+        expected_hash_y = FIELD_WIDTH_FT - 27  # 160 - 27 = 133 feet from bottom (9 yards from top)
     
     # Refine coordinates based on expected positions
-    field_x = expected_yard_line * 3  # Convert yards to feet
-    field_y = expected_hash_y
+    # Virtual field expects coordinates in yards, not feet
+    field_x = expected_yard_line  # Already in yards
+    field_y = expected_hash_y / 3.0  # Convert feet to yards
     
     return {
         "x": field_x,
@@ -352,9 +348,93 @@ def calculate_field_coordinates(parsed_label, bbox, image_width, image_height):
         "yard_number": yard_number
     }
 
+def process_yard_marker_detections_per_frame(detection_json_path, confidence_threshold=0.7):
+    """
+    Process yard marker detection JSON to create correspondence points for each frame
+    
+    Args:
+        detection_json_path: Path to yard marker detection JSON file
+        confidence_threshold: Minimum confidence for detections (default: 0.7)
+    
+    Returns:
+        Dictionary with frame-by-frame correspondence points
+    """
+    print(f"Processing yard marker detections per frame from: {detection_json_path}")
+    
+    # Load detection data
+    detection_data = load_yard_marker_detections(detection_json_path)
+    if not detection_data:
+        return {}
+    
+    frames = detection_data.get('frames', [])
+    print(f"Processing {len(frames)} frames for per-frame correspondence points")
+    
+    # Process each frame individually
+    frame_correspondences = {}
+    frames_with_points = 0
+    
+    for i, frame_data in enumerate(frames):
+        frame_number = frame_data.get('frame_number', 0)
+        frame_detections = frame_data.get('detections', [])
+        
+        # Filter detections by confidence for this frame
+        filtered_detections = filter_detections_by_confidence(frame_detections, confidence_threshold)
+        
+        if len(filtered_detections) < 4:
+            # Not enough detections for this frame
+            frame_correspondences[frame_number] = []
+            continue
+        
+        # Group detections by marker class for this frame
+        grouped_detections = group_detections_by_marker(filtered_detections)
+        
+        # For each marker class, use the best detection (highest confidence) instead of averaging
+        best_detections = []
+        for marker_class, detections in grouped_detections.items():
+            # Find the detection with highest confidence
+            best_detection = max(detections, key=lambda x: x.get('confidence', 0))
+            best_detections.append(best_detection)
+        
+        # Convert to correspondence points for this frame
+        correspondence_points = []
+        for detection in best_detections:
+            field_coords = get_field_coordinates_for_marker(detection['class'])
+            if field_coords:
+                correspondence_points.append({
+                    "image_point": {
+                        "x": detection["bbox"]["center_x"],
+                        "y": detection["bbox"]["center_y"]
+                    },
+                    "field_point": {
+                        "x": field_coords["x"],
+                        "y": field_coords["y"]
+                    },
+                    "yard_marker_info": {
+                        "label": detection["class"],
+                        "yard_line": field_coords["yard_line"],
+                        "hash_side": field_coords["hash_side"],
+                        "near_far": field_coords["near_far"],
+                        "confidence": detection["confidence"]
+                    }
+                })
+        
+        frame_correspondences[frame_number] = correspondence_points
+        
+        if len(correspondence_points) >= 4:
+            frames_with_points += 1
+        
+        # Progress update every 50 frames
+        if i % 50 == 0:
+            progress = (i + 1) / len(frames) * 100
+            print(f"Progress: {progress:.1f}% - Processed {i+1}/{len(frames)} frames ({frames_with_points} with sufficient points)")
+    
+    print(f"Created per-frame correspondence points: {frames_with_points}/{len(frames)} frames have sufficient points")
+    
+    return frame_correspondences
+
 def process_yard_marker_detections(detection_json_path, confidence_threshold=0.7):
     """
-    Process yard marker detection JSON to create correspondence points
+    Process yard marker detection JSON to create correspondence points (averaged approach)
     
     Args:
         detection_json_path: Path to yard marker detection JSON file
@@ -363,7 +443,7 @@ def process_yard_marker_detections(detection_json_path, confidence_threshold=0.7
     Returns:
         List of correspondence points
     """
-    print(f"🎯 Processing yard marker detections from: {detection_json_path}")
+    print(f"Processing yard marker detections from: {detection_json_path}")
     
     # Load detection data
     detection_data = load_yard_marker_detections(detection_json_path)
@@ -376,13 +456,13 @@ def process_yard_marker_detections(detection_json_path, confidence_threshold=0.7
         frame_detections = frame.get('detections', [])
         all_detections.extend(frame_detections)
     
-    print(f"📊 Total detections across all frames: {len(all_detections)}")
+    print(f"Total detections across all frames: {len(all_detections)}")
     
     # Filter by confidence
     filtered_detections = filter_detections_by_confidence(all_detections, confidence_threshold)
     
     if len(filtered_detections) < 4:
-        print(f"❌ Insufficient detections after filtering: {len(filtered_detections)} (need at least 4)")
+        print(f"Insufficient detections after filtering: {len(filtered_detections)} (need at least 4)")
         return []
     
     # Group by marker class
@@ -394,7 +474,7 @@ def process_yard_marker_detections(detection_json_path, confidence_threshold=0.7
         averaged = average_detections_simple(detections)
         averaged_detections.append(averaged)
     
-    print(f"📊 Final averaged detections: {len(averaged_detections)}")
+    print(f"Final averaged detections: {len(averaged_detections)}")
     
     # Convert to correspondence points
     correspondence_points = []
@@ -419,7 +499,7 @@ def process_yard_marker_detections(detection_json_path, confidence_threshold=0.7
                 }
             })
     
-    print(f"✅ Created {len(correspondence_points)} correspondence points")
+    print(f"Created {len(correspondence_points)} correspondence points")
     return correspondence_points
 
 def findCorrespondancePoints(image_path, model_path="yolo_models/yardMarkerDetector.pt"):
@@ -515,6 +595,40 @@ def save_correspondence_points(points, output_path):
     
     print(f"Correspondence points saved to: {output_path}")
 
+def save_correspondence_points_per_frame(frame_correspondences, output_path):
+    """
+    Save per-frame correspondence points to JSON file
+    
+    Args:
+        frame_correspondences: Dictionary with frame-by-frame correspondence points
+        output_path: Path to output JSON file
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Create the output structure for per-frame data
+    output_data = {
+        "frame_correspondences": frame_correspondences,
+        "metadata": {
+            "total_frames": len(frame_correspondences),
+            "frames_with_sufficient_points": sum(1 for points in frame_correspondences.values() if len(points) >= 4),
+            "field_dimensions": {
+                "length_ft": FIELD_LENGTH_FT,
+                "width_ft": FIELD_WIDTH_FT,
+                "hash_distance_ft": HASH_DISTANCE_FT
+            },
+            "ncaa_standards": {
+                "yard_marker_height_ft": YARD_MARKER_HEIGHT_FT,
+                "yard_marker_width_ft": YARD_MARKER_WIDTH_FT,
+                "yard_marker_top_distance_ft": YARD_MARKER_TOP_DIST_FT
+            }
+        }
+    }
+    
+    with open(output_path, 'w') as f:
+        json.dump(output_data, f, indent=2)
+    
+    print(f"Per-frame correspondence points saved to: {output_path}")
+
 def validate_correspondence_points(points):
     """
     Validate that we have enough correspondence points for homography
@@ -554,30 +668,68 @@ def main():
                        help='Minimum confidence threshold for detections (default: 0.7)')
     parser.add_argument('--min-points', type=int, default=4,
                        help='Minimum number of correspondence points required (default: 4)')
+    parser.add_argument('--per-frame', action='store_true',
+                       help='Generate per-frame correspondence points instead of averaged')
     
     args = parser.parse_args()
     
     try:
-        # Process yard marker detections to create correspondence points
-        points = process_yard_marker_detections(args.detection_json, args.confidence)
-        
-        # Validate points
-        if len(points) < args.min_points:
-            print(f"❌ Insufficient correspondence points found: {len(points)} (need at least {args.min_points})")
-            return 1
-        
-        # Save points
-        save_correspondence_points(points, args.output)
-        
-        # Print summary
-        print("\n=== CORRESPONDENCE POINTS SUMMARY ===")
-        for i, point in enumerate(points):
-            info = point["yard_marker_info"]
-            print(f"{i+1}. {info['label']} -> Yard {info['yard_line']}, {info['hash_side']} hash, {info['near_far']} side")
-            print(f"   Image: ({point['image_point']['x']:.1f}, {point['image_point']['y']:.1f})")
-            print(f"   Field: ({point['field_point']['x']:.1f}, {point['field_point']['y']:.1f}) ft")
-            print(f"   Confidence: {info['confidence']:.3f}")
-            print()
+        if args.per_frame:
+            # Process yard marker detections to create per-frame correspondence points
+            frame_correspondences = process_yard_marker_detections_per_frame(args.detection_json, args.confidence)
+            
+            # Count frames with sufficient points
+            frames_with_points = sum(1 for points in frame_correspondences.values() if len(points) >= args.min_points)
+            
+            if frames_with_points == 0:
+                print(f"No frames with sufficient correspondence points found (need at least {args.min_points} points per frame)")
+                return 1
+            
+            # Save per-frame points
+            save_correspondence_points_per_frame(frame_correspondences, args.output)
+            
+            # Print summary
+            print(f"\n=== PER-FRAME CORRESPONDENCE POINTS SUMMARY ===")
+            print(f"Total frames processed: {len(frame_correspondences)}")
+            print(f"Frames with sufficient points: {frames_with_points}")
+            print(f"Success rate: {frames_with_points/len(frame_correspondences)*100:.1f}%")
+            
+            # Show sample frames
+            sample_frames = list(frame_correspondences.keys())[:5]  # Show first 5 frames
+            for frame_num in sample_frames:
+                points = frame_correspondences[frame_num]
+                if len(points) >= args.min_points:
+                    print(f"\nFrame {frame_num} ({len(points)} points):")
+                    for i, point in enumerate(points[:3]):  # Show first 3 points
+                        info = point["yard_marker_info"]
+                        print(f"  {i+1}. {info['label']} -> Yard {info['yard_line']}, {info['hash_side']} hash")
+                        print(f"     Image: ({point['image_point']['x']:.1f}, {point['image_point']['y']:.1f})")
+                        print(f"     Field: ({point['field_point']['x']:.1f}, {point['field_point']['y']:.1f}) ft")
+                        print(f"     Confidence: {info['confidence']:.3f}")
+                    if len(points) > 3:
+                        print(f"  ... and {len(points)-3} more points")
+            
+        else:
+            # Process yard marker detections to create correspondence points (averaged approach)
+            points = process_yard_marker_detections(args.detection_json, args.confidence)
+            
+            # Validate points
+            if len(points) < args.min_points:
+                print(f"Insufficient correspondence points found: {len(points)} (need at least {args.min_points})")
+                return 1
+            
+            # Save points
+            save_correspondence_points(points, args.output)
+            
+            # Print summary
+            print("\n=== CORRESPONDENCE POINTS SUMMARY ===")
+            for i, point in enumerate(points):
+                info = point["yard_marker_info"]
+                print(f"{i+1}. {info['label']} -> Yard {info['yard_line']}, {info['hash_side']} hash, {info['near_far']} side")
+                print(f"   Image: ({point['image_point']['x']:.1f}, {point['image_point']['y']:.1f})")
+                print(f"   Field: ({point['field_point']['x']:.1f}, {point['field_point']['y']:.1f}) ft")
+                print(f"   Confidence: {info['confidence']:.3f}")
+                print()
         
         return 0
         

@@ -266,12 +266,20 @@ def seek_video_frame(parent, frame_number):
     show_video_frame(parent, frame_number)
 
 def toggle_scoreboard(parent, button):
-    """Toggle scoreboard visibility"""
+    """Toggle scoreboard visibility and resize field accordingly"""
     if hasattr(parent, 'scoreboard_widget'):
         if button.isChecked():
             parent.scoreboard_widget.show()
+            # Scoreboard visible - use normal size
+            if hasattr(parent, 'field_figure'):
+                parent.field_figure.set_size_inches(16, 10)
+                parent.field_canvas.draw()
         else:
             parent.scoreboard_widget.hide()
+            # Scoreboard hidden - make field larger
+            if hasattr(parent, 'field_figure'):
+                parent.field_figure.set_size_inches(20, 12)  # Much larger when scoreboard is hidden
+                parent.field_canvas.draw()
 
 def create_dock_title_bar(dock, parent):
     """Create a custom title bar for the dock widget with scoreboard toggle"""
