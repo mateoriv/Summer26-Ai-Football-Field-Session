@@ -11,228 +11,169 @@ import sys
 import numpy as np
 import cv2
 
-def load_player_detections(detection_json_path):
-    """Load player detection data from JSON file"""
-    try:
-        with open(detection_json_path, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading player detections: {e}")
-        return None
+# NCAA Field dimensions (in yards) - consistent with virtualField.py
+FIELD_LENGTH_YD = 120.0  # 120 yards (0-120)
+FIELD_WIDTH_YD = 160.0 / 3.0  # ~53.33 yards (0-53.33)
 
-def load_correspondence_points(correspondence_json_path):
-    """Load correspondence points data from JSON file"""
-    try:
-        with open(correspondence_json_path, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading correspondence points: {e}")
-        return None
+def load_json_data(file_path):
+    """Load JSON data from a file."""
+    with open(file_path, 'r') as f:
+        return json.load(f)
 
-def create_homography_matrix(correspondence_points):
+def save_json_data(data, file_path):
+    """Save JSON data to a file."""
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def get_homography_matrix(image_points, field_points):
     """
-    Create homography matrix from correspondence points
-    
+    Calculate the homography matrix from image points to field points.
     Args:
-        correspondence_points: List of correspondence points with image_point and field_point
-    
+        image_points (np.array): Nx2 array of (x, y) pixel coordinates.
+        field_points (np.array): Nx2 array of (x, y) field coordinates (yards).
     Returns:
-        Homography matrix or None if insufficient points
+        np.array: 3x3 homography matrix, or None if calculation fails.
     """
-    if len(correspondence_points) < 4:
+    if len(image_points) < 4 or len(field_points) < 4:
         return None
     
-    # Extract image points (pixel coordinates)
-    image_points = []
-    field_points = []
-    
-    for point in correspondence_points:
-        img_pt = point.get('image_point', {})
-        field_pt = point.get('field_point', {})
-        
-        if 'x' in img_pt and 'y' in img_pt and 'x' in field_pt and 'y' in field_pt:
-            image_points.append([img_pt['x'], img_pt['y']])
-            field_points.append([field_pt['x'], field_pt['y']])
-    
-    if len(image_points) < 4:
-        return None
-    
-    # Convert to numpy arrays
+    # Ensure points are float32
     image_points = np.array(image_points, dtype=np.float32)
     field_points = np.array(field_points, dtype=np.float32)
-    
-    # Calculate homography matrix
-    try:
-        homography_matrix, mask = cv2.findHomography(image_points, field_points, cv2.RANSAC)
-        return homography_matrix
-    except Exception as e:
-        print(f"Error calculating homography matrix: {e}")
+
+    H, _ = cv2.findHomography(image_points, field_points, cv2.RANSAC, 5.0)
+    return H
+
+def transform_point(point_px, H):
+    """
+    Transform a single pixel point to field coordinates using homography matrix.
+    Args:
+        point_px (tuple): (x, y) pixel coordinates.
+        H (np.array): 3x3 homography matrix.
+    Returns:
+        tuple: (x, y) field coordinates (yards), or None if transformation fails.
+    """
+    if H is None:
         return None
+    
+    point_px_homogeneous = np.array([[point_px[0]], [point_px[1]], [1]], dtype=np.float32)
+    point_field_homogeneous = H @ point_px_homogeneous
+    
+    # Normalize by the third coordinate
+    if point_field_homogeneous[2][0] != 0:
+        x_field = point_field_homogeneous[0][0] / point_field_homogeneous[2][0]
+        y_field = point_field_homogeneous[1][0] / point_field_homogeneous[2][0]
+        return (x_field, y_field)
+    return None
 
-def transform_player_positions(players, homography_matrix):
+def process_per_frame_homography(player_detections_path, correspondence_points_path, output_path):
     """
-    Transform player positions using homography matrix
-    
+    Process player detections and correspondence points per frame to generate normalized positions.
     Args:
-        players: List of player detection dictionaries
-        homography_matrix: 3x3 homography matrix
-    
-    Returns:
-        List of transformed player positions
+        player_detections_path (str): Path to player detections JSON file.
+        correspondence_points_path (str): Path to correspondence points JSON file.
+        output_path (str): Path to save the output normalized positions JSON file.
     """
-    if homography_matrix is None:
-        return []
+    print(f"Loading player detections from: {player_detections_path}")
+    player_data = load_json_data(player_detections_path)
     
-    transformed_players = []
-    
-    for player in players:
-        bbox = player.get('bbox', {})
-        if 'center_x' in bbox and 'center_y' in bbox:
-            # Get player center coordinates
-            x = bbox['center_x']
-            y = bbox['center_y']
-            
-            # Transform using homography matrix
-            point = np.array([[x, y]], dtype=np.float32).reshape(-1, 1, 2)
-            transformed_point = cv2.perspectiveTransform(point, homography_matrix)
-            
-            # Extract transformed coordinates
-            tx = float(transformed_point[0][0][0])
-            ty = float(transformed_point[0][0][1])
-            
-            # Create transformed player data
-            transformed_player = {
-                "frame_number": player.get("frame_number", 0),
-                "object_label": "player",
-                "normalized_position": {
-                    "x": tx,
-                    "y": ty
-                },
-                "original_bbox": bbox,
-                "confidence": player.get("confidence", 0.0)
-            }
-            
-            transformed_players.append(transformed_player)
-    
-    return transformed_players
+    print(f"Loading correspondence points from: {correspondence_points_path}")
+    correspondence_data = load_json_data(correspondence_points_path)
 
-def process_per_frame_homography(player_detections, correspondence_data):
-    """
-    Process homography transformation for each frame
+    total_frames = player_data.get('total_frames', 0)
+    if not total_frames:
+        total_frames = len(player_data.get('frames', []))
     
-    Args:
-        player_detections: Player detection data
-        correspondence_data: Correspondence points data
-    
-    Returns:
-        Dictionary with normalized player positions per frame
-    """
-    print("Processing per-frame homography transformation...")
-    
-    # Get frame correspondences
     frame_correspondences = correspondence_data.get('frame_correspondences', {})
-    total_frames = correspondence_data.get('total_frames', 0)
     
-    # Get player frames
-    player_frames = player_detections.get('frames', [])
+    normalized_positions_output = {
+        "total_frames": total_frames,
+        "frames_processed": 0,
+        "frames_with_sufficient_markers": 0,
+        "normalized_positions": {}
+    }
     
-    # Process each frame
-    normalized_positions = {}
-    frames_processed = 0
     frames_with_sufficient_markers = 0
     
-    for frame_data in player_frames:
-        frame_number = frame_data.get('frame_number', 0)
+    print(f"Processing {total_frames} frames for per-frame homography transformation...")
+
+    for i, frame_data in enumerate(player_data.get('frames', [])):
+        frame_number = frame_data.get('frame_number', i)
+        player_detections = frame_data.get('detections', [])
         
-        # Get correspondence points for this frame
-        correspondence_points = frame_correspondences.get(str(frame_number), [])
+        current_frame_correspondences = frame_correspondences.get(str(frame_number), [])
         
-        if len(correspondence_points) < 4:
-            # Skip frame if insufficient markers
-            normalized_positions[frame_number] = []
+        image_points = []
+        field_points = []
+        
+        # Collect image and field points from correspondence data
+        for cp in current_frame_correspondences:
+            image_points.append([cp['image_point']['x'], cp['image_point']['y']])
+            field_points.append([cp['field_point']['x'], cp['field_point']['y']])
+        
+        if len(image_points) < 4:
+            # Skip frame if not enough correspondence points
+            normalized_positions_output['normalized_positions'][str(frame_number)] = []
+            if i % 50 == 0:
+                progress = (i + 1) / total_frames * 100
+                print(f"Progress: {progress:.1f}% - Frame {frame_number}: Skipping (not enough markers: {len(image_points)})")
             continue
         
-        # Create homography matrix for this frame
-        homography_matrix = create_homography_matrix(correspondence_points)
+        # Calculate homography matrix for this frame
+        H = get_homography_matrix(image_points, field_points)
         
-        if homography_matrix is None:
-            normalized_positions[frame_number] = []
+        if H is None:
+            normalized_positions_output['normalized_positions'][str(frame_number)] = []
+            if i % 50 == 0:
+                progress = (i + 1) / total_frames * 100
+                print(f"Progress: {progress:.1f}% - Frame {frame_number}: Skipping (homography failed)")
             continue
         
         frames_with_sufficient_markers += 1
         
-        # Get players for this frame
-        players = frame_data.get('detections', [])
+        # Transform player detections
+        transformed_players = []
+        for player_det in player_detections:
+            bbox = player_det.get('bbox', {})
+            if 'center_x' in bbox and 'center_y' in bbox:
+                player_pixel_point = (bbox['center_x'], bbox['center_y'])
+                normalized_pos = transform_point(player_pixel_point, H)
+                
+                if normalized_pos:
+                    transformed_players.append({
+                        "frame_number": frame_number,
+                        "object_label": player_det.get('class', 'player'),
+                        "normalized_position": {"x": normalized_pos[0], "y": normalized_pos[1]},
+                        "original_bbox": bbox,
+                        "confidence": player_det.get('confidence', 0.0)
+                    })
         
-        # Transform player positions
-        transformed_players = transform_player_positions(players, homography_matrix)
-        normalized_positions[frame_number] = transformed_players
+        normalized_positions_output['normalized_positions'][str(frame_number)] = transformed_players
         
-        frames_processed += 1
-        
-        # Progress update
-        if frame_number % 50 == 0:
-            progress = (frame_number + 1) / total_frames * 100
-            print(f"Progress: {progress:.1f}% - Processed {frame_number + 1}/{total_frames} frames")
+        if i % 50 == 0:
+            progress = (i + 1) / total_frames * 100
+            print(f"Progress: {progress:.1f}% - Frame {frame_number}: Processed {len(transformed_players)} players")
+
+    normalized_positions_output['frames_processed'] = total_frames
+    normalized_positions_output['frames_with_sufficient_markers'] = frames_with_sufficient_markers
     
-    print(f"Homography transformation completed!")
-    print(f"Frames processed: {frames_processed}")
-    print(f"Frames with sufficient markers: {frames_with_sufficient_markers}")
-    print(f"Success rate: {frames_with_sufficient_markers/frames_processed*100:.1f}%")
-    
-    return {
-        "total_frames": total_frames,
-        "frames_processed": frames_processed,
-        "frames_with_sufficient_markers": frames_with_sufficient_markers,
-        "normalized_positions": normalized_positions
-    }
+    save_json_data(normalized_positions_output, output_path)
+    print(f"Normalized positions saved to: {output_path}")
+    print(f"Total frames: {total_frames}, Frames with sufficient markers: {frames_with_sufficient_markers}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Per-frame homography transformation')
+    parser = argparse.ArgumentParser(description='Perform per-frame homography transformation')
     parser.add_argument('--player-detections', required=True,
-                       help='Path to player detection JSON file')
+                        help='Path to player detections JSON file')
     parser.add_argument('--correspondence-points', required=True,
-                       help='Path to correspondence points JSON file')
+                        help='Path to per-frame correspondence points JSON file')
     parser.add_argument('--output', required=True,
-                       help='Path for output JSON file')
+                        help='Path to save the output normalized positions JSON file')
     
     args = parser.parse_args()
     
-    # Check if input files exist
-    if not os.path.exists(args.player_detections):
-        print(f"Error: Player detection file not found: {args.player_detections}")
-        return 1
-    
-    if not os.path.exists(args.correspondence_points):
-        print(f"Error: Correspondence points file not found: {args.correspondence_points}")
-        return 1
-    
-    # Create output directory if it doesn't exist
-    output_dir = os.path.dirname(args.output)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    # Load data
-    print(f"Loading player detections from: {args.player_detections}")
-    player_detections = load_player_detections(args.player_detections)
-    if not player_detections:
-        return 1
-    
-    print(f"Loading correspondence points from: {args.correspondence_points}")
-    correspondence_data = load_correspondence_points(args.correspondence_points)
-    if not correspondence_data:
-        return 1
-    
-    # Process homography transformation
-    result = process_per_frame_homography(player_detections, correspondence_data)
-    
-    # Save results
-    print(f"Saving normalized positions to: {args.output}")
-    with open(args.output, 'w') as f:
-        json.dump(result, f, indent=2)
-    
-    print("Per-frame homography transformation completed successfully!")
-    return 0
+    process_per_frame_homography(args.player_detections, args.correspondence_points, args.output)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
