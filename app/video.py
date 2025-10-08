@@ -65,8 +65,20 @@ class CustomVideoWidget(QWidget):
             
             if self.parent_window:
                 self.update_parent_controls()
+                # Update virtual field with current frame
+                self.update_virtual_field()
             
             self.update()
+    
+    def update_virtual_field(self):
+        """Update the virtual field with current frame"""
+        if not hasattr(self, 'parent_window') or not self.parent_window:
+            return
+        
+        parent = self.parent_window
+        if hasattr(parent, 'virtual_field'):
+            from virtualField import update_virtual_field_with_video_frame
+            update_virtual_field_with_video_frame(parent, self.current_frame)
     
     def update_parent_controls(self):
         """Update parent's progress slider and time label."""
@@ -922,6 +934,12 @@ def set_current_video_path(parent, video_path):
     # The visibility is controlled by the toggle buttons, but data is always loaded
     load_and_set_detection_data(parent, "players")
     load_and_set_detection_data(parent, "yard_markers")
+    
+    # Load homography data for virtual field
+    if hasattr(parent, 'current_folder') and hasattr(parent, 'virtual_field'):
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        from virtualField import load_homography_data_for_virtual_field
+        load_homography_data_for_virtual_field(parent, video_name, parent.current_folder)
     
     # Sync the video widget's internal state with the parent's button states
     if hasattr(parent, 'custom_video'):

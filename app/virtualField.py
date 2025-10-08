@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QSlider
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QPixmap, QPainter, QPen, QBrush, QColor
 import subprocess
 import platform
 import cv2
@@ -9,9 +10,139 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import sys
 import os
+import json
 
 # Add scripts directory to path to import field drawing functions
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+
+class VirtualFieldWidget(QWidget):
+    """Widget that displays a static football field with player dots"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.current_frame = 0
+        self.homography_data = None
+        self.field_image = None
+        self.setMinimumSize(400, 300)
+        self.setStyleSheet("background-color: #2b2b2b; border: 1px solid #555555;")
+        
+        # Load field image
+        self.load_field_image()
+        
+    def load_field_image(self):
+        """Load a simple football field image as background"""
+        # Create a simple field image without matplotlib to avoid layering issues
+        field_width = 400
+        field_height = 200
+        
+        # Create a green field background
+        field_img = np.full((field_height, field_width, 3), [34, 139, 34], dtype=np.uint8)
+        
+        # Draw yard lines (every 10 yards)
+        for i in range(0, field_width, field_width // 10):  # 10 sections for 100 yards
+            cv2.line(field_img, (i, 0), (i, field_height), (255, 255, 255), 2)
+        
+        # Draw hash marks (every 5 yards)
+        for i in range(field_width // 20, field_width, field_width // 20):
+            cv2.line(field_img, (i, field_height // 4), (i, 3 * field_height // 4), (255, 255, 255), 1)
+        
+        # Convert to QPixmap
+        field_rgb = cv2.cvtColor(field_img, cv2.COLOR_BGR2RGB)
+        h, w, ch = field_rgb.shape
+        bytes_per_line = ch * w
+        from PySide6.QtGui import QImage
+        q_image = QImage(field_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        self.field_image = QPixmap.fromImage(q_image)
+        
+    def load_homography_data(self, video_name, folder_name):
+        """Load homography data for the current video"""
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            homography_file = os.path.join(project_root, "cache",  os.path.basename(folder_name), "homography", f"{video_name}_normalized_positions.json")
+            
+            if os.path.exists(homography_file):
+                with open(homography_file, 'r') as f:
+                    self.homography_data = json.load(f)
+                print(f"Loaded homography data: {self.homography_data.get('total_frames')} frames")
+                return True
+            else:
+                print(f"Homography file not found: {homography_file}")
+                print("lol")
+                self.homography_data = None
+                return False
+        except Exception as e:
+            print(f"Error loading homography data: {e}")
+            self.homography_data = None
+            return False
+    
+    def set_current_frame(self, frame_number):
+        """Set the current frame and update the display"""
+        self.current_frame = frame_number
+        self.update()
+    
+    def paintEvent(self, event):
+        """Paint the field with player dots"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Draw field background
+        if self.field_image:
+            # Scale field image to fit widget
+            scaled_field = self.field_image.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            painter.drawPixmap(0, 0, scaled_field)
+        
+        # Draw player dots if we have homography data
+        if self.homography_data and 'normalized_positions' in self.homography_data:
+            normalized_positions = self.homography_data['normalized_positions']
+            frame_key = str(self.current_frame)
+            
+            if frame_key in normalized_positions:
+                players = normalized_positions[frame_key]
+                
+                # Debug: Print player count
+                if players:
+                    print(f"Drawing {len(players)} players for frame {self.current_frame}")
+                
+                # Draw each player as a dot
+                for i, player in enumerate(players):
+                    # Get coordinates from normalized_position
+                    normalized_pos = player.get('normalized_position', {})
+                    x = normalized_pos.get('x', 0)
+                    y = normalized_pos.get('y', 0)
+                    
+                    # Convert field coordinates to widget coordinates
+                    # Field is 100 yards long and 53.33 yards wide
+                    # (0,0) is bottom left corner of the field
+                    
+                    # Map X: 0-100 yards to 0-width pixels
+                    widget_x = int(x * self.width() / 100)
+                    
+                    # Map Y: 0-53.33 yards to height-0 pixels (flip Y so 0,0 is bottom)
+                    widget_y = int(self.height() - (y * self.height() / 53.33))
+                    
+                    # Debug: Print coordinates
+                    if i < 3:  # Only print first 3 players to avoid spam
+                        print(f"Player {i}: field({x:.1f},{y:.1f}) -> widget({widget_x},{widget_y})")
+                    
+                    # Only draw if coordinates are within reasonable bounds
+                    if 0 <= widget_x <= self.width() and 0 <= widget_y <= self.height():
+                        # Draw player dot - make it more visible
+                        painter.setBrush(QBrush(QColor(255, 0, 0)))  # Red dot
+                        painter.setPen(QPen(QColor(255, 255, 255), 3))  # Thicker white border
+                        painter.drawEllipse(widget_x - 8, widget_y - 8, 16, 16)  # Larger dot
+                        
+                        # Debug: Draw a small text label
+                        painter.setPen(QPen(QColor(255, 255, 255)))
+                        painter.drawText(widget_x + 10, widget_y, f"({x:.1f},{y:.1f})")
+                    else:
+                        print(f"Player {i} out of bounds: ({widget_x},{widget_y})")
+        
+        # Draw frame number
+        painter.setPen(QPen(QColor(0, 0, 0)))  # Black text
+        painter.drawText(10, 20, f"Frame: {self.current_frame}")
+        
+        painter.end()
 
 def draw_field(ax, correspondence_points=None):
     """Draw a college football field to scale (yards) - from drawPlayers.py"""
@@ -353,6 +484,7 @@ def create_dock_title_bar(dock, parent):
     return title_bar
 
 def create_virtual_field_dock(parent):
+    """Create a simplified virtual field dock with static field image and player dots"""
     dock = QDockWidget("Virtual Field", parent)
     dock.setAllowedAreas(Qt.AllDockWidgetAreas)
     dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
@@ -369,87 +501,28 @@ def create_virtual_field_dock(parent):
     scoreboard_widget = create_scoreboard(parent)
     layout.addWidget(scoreboard_widget)
     
+    # Create the virtual field widget
+    virtual_field = VirtualFieldWidget(parent)
+    layout.addWidget(virtual_field)
     
-    # Create matplotlib figure (much larger size)
-    fig = Figure(figsize=(16, 10), facecolor='#2b2b2b')
-    canvas = FigureCanvas(fig)
-    canvas.setStyleSheet("background-color: #2b2b2b;")
+    # Store reference for updates
+    parent.virtual_field = virtual_field
     
-    # Create axes with dark background
-    ax = fig.add_subplot(111, facecolor='#2b2b2b')
-    
-    # Draw the football field
-    draw_field(ax)
-    
-    # Store references for later updates
-    parent.field_figure = fig
-    parent.field_axes = ax
-    parent.field_canvas = canvas
-    
-    layout.addWidget(canvas)
-    
-    # Add video controls
-    video_controls_layout = QHBoxLayout()
-    
-    # Play/Pause button
-    play_button = QPushButton("▶️ Play")
-    play_button.setStyleSheet("""
-        QPushButton {
-            background-color: #2196F3;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
-            font-weight: bold;
-        }
-        QPushButton:hover {
-            background-color: #1976D2;
-        }
-    """)
-    play_button.clicked.connect(lambda: toggle_video_playback(parent))
-    video_controls_layout.addWidget(play_button)
-    
-    # Frame slider
-    frame_slider = QSlider(Qt.Horizontal)
-    frame_slider.setMinimum(0)
-    frame_slider.setMaximum(100)
-    frame_slider.setValue(0)
-    frame_slider.setStyleSheet("""
-        QSlider::groove:horizontal {
-            border: 1px solid #999999;
-            height: 8px;
-            background: #333333;
-            border-radius: 4px;
-        }
-        QSlider::handle:horizontal {
-            background: #4CAF50;
-            border: 1px solid #4CAF50;
-            width: 18px;
-            margin: -5px 0;
-            border-radius: 9px;
-        }
-    """)
-    frame_slider.valueChanged.connect(lambda value: seek_video_frame(parent, value))
-    video_controls_layout.addWidget(frame_slider)
-    
-    # Frame counter
-    frame_label = QLabel("0 / 0")
-    frame_label.setStyleSheet("color: white; font-weight: bold;")
-    video_controls_layout.addWidget(frame_label)
-    
-    layout.addLayout(video_controls_layout)
-    
-    # Store video control references
-    parent.play_button = play_button
-    parent.frame_slider = frame_slider
-    parent.frame_label = frame_label
-    parent.video_cap = None
-    parent.video_timer = QTimer()
-    parent.video_timer.timeout.connect(lambda: next_video_frame(parent))
     main_widget.setLayout(layout)
     dock.setWidget(main_widget)
     
     return dock
+
+def update_virtual_field_with_video_frame(parent, frame_number):
+    """Update the virtual field to show the current video frame's player positions"""
+    if hasattr(parent, 'virtual_field'):
+        parent.virtual_field.set_current_frame(frame_number)
+
+def load_homography_data_for_virtual_field(parent, video_name, folder_name):
+    """Load homography data for the virtual field"""
+    if hasattr(parent, 'virtual_field'):
+        return parent.virtual_field.load_homography_data(video_name, folder_name)
+    return False
 
 def create_scoreboard(parent):
     """Create a scoreboard widget with orange football scoreboard design"""
