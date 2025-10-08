@@ -29,12 +29,31 @@ import numpy as np
 from collections import defaultdict
 
 # NCAA Field dimensions (in feet)
-FIELD_LENGTH_FT = 360  # 120 yards * 3 feet/yard
-FIELD_WIDTH_FT = 160   # 160 feet
-HASH_DISTANCE_FT = 40  # Hash marks 40 feet from sidelines
-YARD_MARKER_HEIGHT_FT = 6  # Max height per NCAA rules
-YARD_MARKER_WIDTH_FT = 4   # Max width per NCAA rules
-YARD_MARKER_TOP_DIST_FT = 27  # 9 yards * 3 feet/yard from sidelines
+FIELD_LENGTH_YD = 100 # 100 yards
+FIELD_WIDTH_YD = 160/3  # 160 feet to yards
+YARD_MARKER_DIST_YD = 8  # Center is 8 yards from sideline
+positionsDict = {
+    "nl1": (10, YARD_MARKER_DIST_YD),
+    "nl2": (20, YARD_MARKER_DIST_YD),
+    "nl3": (30, YARD_MARKER_DIST_YD),
+    "nl4": (40, YARD_MARKER_DIST_YD),
+    "n5": (50, YARD_MARKER_DIST_YD),
+    "nr4": (FIELD_LENGTH_YD - 40, YARD_MARKER_DIST_YD),
+    "nr3": (FIELD_LENGTH_YD - 30, YARD_MARKER_DIST_YD),
+    "nr2": (FIELD_LENGTH_YD - 20, YARD_MARKER_DIST_YD),
+    "nr1": (FIELD_LENGTH_YD - 10, YARD_MARKER_DIST_YD),
+    "fl1": (10, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+    "fl2": (20, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+    "fl3": (30, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+    "fl4": (40, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+    "f5": (50, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+    "fr4": (FIELD_LENGTH_YD - 40, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+    "fr3": (FIELD_LENGTH_YD - 30, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+    "fr2": (FIELD_LENGTH_YD - 20, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+    "fr1": (FIELD_LENGTH_YD - 10, FIELD_WIDTH_YD - YARD_MARKER_DIST_YD),
+
+}
+
 
 def load_yard_marker_detections(detection_json_path):
     """
@@ -97,6 +116,7 @@ def get_field_coordinates_for_marker(marker_class):
         Dictionary with field coordinates in feet
     """
     # Parse the marker label
+    print(f"Parsing marker class: {marker_class}")
     parsed = parse_yard_marker_label(marker_class)
     if not parsed:
         return None
@@ -105,33 +125,14 @@ def get_field_coordinates_for_marker(marker_class):
     near_far = parsed["near_far"]
     left_right = parsed["left_right"] 
     yard_number = parsed["yard_number"]
-    
-    # Field dimensions (in feet)
-    field_length = FIELD_LENGTH_FT  # 360 feet (120 yards)
-    field_width = FIELD_WIDTH_FT    # 160 feet
-    
-    # Yard marker is 7 yards from sideline (21 feet)
-    yard_marker_distance_ft = 7 * 3  # 21 feet from sideline
-    
+
     # Calculate yard line position
     # fl1 = far left 10-yard marker, fl2 = far left 20-yard marker, etc.
     yard_line = yard_number * 10  # 10, 20, 30, 40, 50
     
-    # Convert yard line to feet from near endzone
-    yard_line_feet = yard_line * 3  # 3 feet per yard
-    
-    # Calculate position from sideline
-    if left_right == 'l':  # Left side
-        field_x = yard_marker_distance_ft  # 21 feet from left sideline
-    else:  # Right side
-        field_x = field_width - yard_marker_distance_ft  # 21 feet from right sideline
-    
-    # Calculate position along field length
-    if near_far == 'n':  # Near side (0-50 yard line)
-        field_y = yard_line_feet
-    else:  # Far side (50-100 yard line)
-        field_y = yard_line_feet
-    
+    field_x = positionsDict[marker_class][0]
+    field_y = positionsDict[marker_class][1]
+
     return {
         "x": field_x,
         "y": field_y,
@@ -406,14 +407,9 @@ def save_correspondence_points(points, output_path):
         "metadata": {
             "total_points": len(points),
             "field_dimensions": {
-                "length_ft": FIELD_LENGTH_FT,
-                "width_ft": FIELD_WIDTH_FT,
-                "hash_distance_ft": HASH_DISTANCE_FT
-            },
-            "ncaa_standards": {
-                "yard_marker_height_ft": YARD_MARKER_HEIGHT_FT,
-                "yard_marker_width_ft": YARD_MARKER_WIDTH_FT,
-                "yard_marker_top_distance_ft": YARD_MARKER_TOP_DIST_FT
+                "length_yd": FIELD_LENGTH_YD,
+                "width_yd": FIELD_WIDTH_YD,
+                "yard_marker_distance_yd": YARD_MARKER_DIST_YD
             }
         }
     }
@@ -440,14 +436,9 @@ def save_correspondence_points_per_frame(frame_correspondences, output_path):
             "total_frames": len(frame_correspondences),
             "frames_with_sufficient_points": sum(1 for points in frame_correspondences.values() if len(points) >= 4),
             "field_dimensions": {
-                "length_ft": FIELD_LENGTH_FT,
-                "width_ft": FIELD_WIDTH_FT,
-                "hash_distance_ft": HASH_DISTANCE_FT
-            },
-            "ncaa_standards": {
-                "yard_marker_height_ft": YARD_MARKER_HEIGHT_FT,
-                "yard_marker_width_ft": YARD_MARKER_WIDTH_FT,
-                "yard_marker_top_distance_ft": YARD_MARKER_TOP_DIST_FT
+                "length_yd": FIELD_LENGTH_YD,
+                "width_yd": FIELD_WIDTH_YD,
+                "yard_marker_distance_yd": YARD_MARKER_DIST_YD
             }
         }
     }
