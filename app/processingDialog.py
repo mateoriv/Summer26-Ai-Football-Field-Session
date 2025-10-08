@@ -29,7 +29,8 @@ class ProcessingWorker(QThread):
         super().__init__()
         self.video_path = video_path
         self.video_folder =  os.path.basename(video_folder)
-        self.output_dir = output_dir
+        # Make output directory absolute to avoid working directory issues
+        self.output_dir = os.path.abspath(output_dir)
         self.process = None
         self.is_cancelled = False
         self.current_step = 0  # 0: detection, 1: yard markers, 2: homography, 3: rendering
@@ -75,7 +76,11 @@ class ProcessingWorker(QThread):
             # Get video filename without extension
             if not self.video_name:
                 self.video_name = Path(self.video_path).stem
+                if not self.video_name:
+                    # Fallback: extract from filename manually
+                    self.video_name = os.path.splitext(os.path.basename(self.video_path))[0]
                 self.output_received.emit(f"Processing video: {self.video_path}")
+                self.output_received.emit(f"Video name extracted: {self.video_name}")
                 self.output_received.emit(f"Output directory: {self.output_dir}")
                 self.output_received.emit("-" * 50)
             
@@ -86,7 +91,7 @@ class ProcessingWorker(QThread):
                 
                 self.detection_output = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
                 detection_cmd = [
-                    "python3", "scripts/playerDetection.py", 
+                    "python", "scripts/playerDetection.py", 
                     "--video", self.video_path, 
                     "--output", self.detection_output
                 ]
@@ -112,7 +117,7 @@ class ProcessingWorker(QThread):
                 
                 yard_marker_output = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
                 yard_marker_cmd = [
-                    "python3", "scripts/yardMarkerDetection.py",
+                    "python", "scripts/yardMarkerDetection.py",
                     "--video", self.video_path,
                     "--output", yard_marker_output
                 ]
@@ -135,10 +140,11 @@ class ProcessingWorker(QThread):
                 correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
                 
                 correspondence_cmd = [
-                    "python3", "scripts/autoCorrespondancePoints.py",
+                    "python", "scripts/autoCorrespondancePoints.py",
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
-                    "--confidence", "0.7"
+                    "--confidence", "0.7",
+                    "--per-frame"
                 ]
                 
                 if self.is_cancelled:
@@ -146,17 +152,46 @@ class ProcessingWorker(QThread):
                     
                 result = self._run_command(correspondence_cmd, "Correspondence Points Generation", 0, 100)
                 if result:
-                    # Update virtual field with yard marker dots
+                    # Update virtual field with yard marker dots (show frame 0 by default)
                     from virtualField import update_field_with_correspondence_points
-                    update_field_with_correspondence_points(self.parent(), correspondence_output)
+                    update_field_with_correspondence_points(self.parent(), correspondence_output, frame_number=0)
                     self.step_completed.emit("Correspondence Points Generation", True)
                 else:
                     self.step_completed.emit("Correspondence Points Generation", False)
                     
             elif self.current_step == 3:
-                # Step 4: Homography Transformation
-                self.progress_updated.emit(0, "Step 4: Initializing homography transformation...")
-                self.output_received.emit("Step 4: Running homography transformation...")
+                # Step 4: Render Correspondence Points Video
+                self.progress_updated.emit(0, "Step 4: Initializing correspondence points video rendering...")
+                self.output_received.emit("Step 4: Rendering correspondence points video...")
+                
+                correspondence_file = os.path.abspath(os.path.join(self.output_dir, self.video_folder, "correspondence", f"{self.video_name}_correspondence.json"))
+                output_video = os.path.abspath(os.path.join(self.output_dir, self.video_folder, "correspondence", f"{self.video_name}_correspondence_video.mp4"))
+                
+                if os.path.exists(correspondence_file):
+                    self.output_received.emit("Correspondence points found, rendering video...")
+                    
+                    # Run the correspondence video rendering script
+                    cmd = [
+                        "python", "scripts/renderCorrespondenceVideo.py",
+                        "--correspondence-json", correspondence_file,
+                        "--output", output_video,
+                        "--fps", "30"
+                    ]
+                    
+                    success = self._run_command(cmd, "Render Correspondence Points", 0, 100)
+                    if success:
+                        self.output_received.emit(f"Correspondence points video rendered: {output_video}")
+                        self.step_completed.emit("Render Correspondence Points", True)
+                    else:
+                        self.step_completed.emit("Render Correspondence Points", False)
+                else:
+                    self.output_received.emit("No correspondence points found, skipping video rendering")
+                    self.step_completed.emit("Render Correspondence Points", False)
+                    
+            elif self.current_step == 4:
+                # Step 5: Homography Transformation
+                self.progress_updated.emit(0, "Step 5: Initializing homography transformation...")
+                self.output_received.emit("Step 5: Running homography transformation...")
                 
                 correspondence_file = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
                 
@@ -164,7 +199,7 @@ class ProcessingWorker(QThread):
                     self.output_received.emit("Correspondence points found, running homography transformation...")
                     self.homography_output = f"{self.output_dir}/{self.video_folder}/{self.video_name}_homography.json"
                     homography_cmd = [
-                        "python3", "scripts/homographyTransform.py",
+                        "python", "scripts/homographyTransform.py",
                         "--input", self.detection_output,
                         "--correspondence", correspondence_file,
                         "--output", self.homography_output
@@ -182,15 +217,15 @@ class ProcessingWorker(QThread):
                     self.output_received.emit("No correspondence points found, skipping homography transformation")
                     self.step_completed.emit("Homography Transformation", False)
                     
-            elif self.current_step == 4:
-                # Step 5: Render Field Video
-                self.progress_updated.emit(0, "Step 5: Initializing field video rendering...")
-                self.output_received.emit("Step 5: Rendering field video...")
+            elif self.current_step == 5:
+                # Step 6: Render Field Video
+                self.progress_updated.emit(0, "Step 6: Initializing field video rendering...")
+                self.output_received.emit("Step 6: Rendering field video...")
                 
                 if self.homography_output and os.path.exists(self.homography_output):
                     field_video_output = f"{self.output_dir}/{self.video_folder}/virtual_field/{self.video_name}_field.mp4"
                     render_cmd = [
-                        "python3", "scripts/renderFieldVideo.py",
+                        "python", "scripts/renderFieldVideo.py",
                         "--input", self.homography_output,
                         "--output", field_video_output
                     ]
@@ -260,7 +295,7 @@ class ProcessingWorker(QThread):
                 env=env
             )
         
-            # Non-blocking output reading with progress updates
+            # Simple output reading with progress updates
             line_count = 0
             start_time = time.time()
             last_update_time = 0
@@ -270,58 +305,27 @@ class ProcessingWorker(QThread):
                     self.process.terminate()
                     return False
                 
-                # Check for output (non-blocking)
-                import select
-                if select.select([self.process.stdout], [], [], 0.1)[0]:  # 0.1 second timeout
-                    line = self.process.stdout.readline()
-                    if line:
-                        line = line.strip()
-                        if line:
-                            self.output_received.emit(line)
-                            line_count += 1
-                            
-                            # Look for frame processing indicators in the output
-                            if "frame" in line.lower() or "processing" in line.lower():
-                                # Try to extract frame numbers from output
-                                import re
-                                # Look for patterns like "Processed frame 150/1000" or "frame 150"
-                                frame_match = re.search(r'frame\s*(\d+)(?:/(\d+))?', line.lower())
-                                if frame_match:
-                                    self.current_frame = int(frame_match.group(1))
-                                    self.frames_processed = self.current_frame
-                                    
-                                    # If we start getting frame data, we're past bootup
-                                    if self.bootup_start_time is None:
-                                        self.bootup_start_time = time.time() - start_time
-                
-                # Update progress every 0.1 seconds regardless of output
+                # Simple progress update every 0.5 seconds
                 elapsed_time = time.time() - start_time
-                if elapsed_time - last_update_time >= 0.1:
+                if elapsed_time - last_update_time >= 0.5:
                     last_update_time = elapsed_time
                     
-                    # Calculate progress based on phase
-                    if self.bootup_start_time is not None:
-                        # Frame processing phase: 25% to 100% based on actual frames
-                        if self.total_frames > 0 and self.current_frame > 0:
-                            frame_progress = self.current_frame / self.total_frames
-                            # 25% + (75% * frame_progress) = 25% to 100%
-                            progress = (0.25 + 0.75 * frame_progress) * 100
-                            
-                            # Show detailed progress every 10 frames to avoid spam
-                            if self.current_frame % 10 == 0:
-                                self.output_received.emit(f"Processing frame {self.current_frame}/{self.total_frames} ({frame_progress*100:.1f}%)")
-                        else:
-                            # Frame data started but no current frame yet - stay at 25%
-                            progress = progress_start + (progress_end - progress_start) * 0.25
-                    else:
+                    # Calculate progress based on elapsed time (simplified approach)
+                    if elapsed_time < 10:
                         # Bootup phase: 0% to 25% over 10 seconds
-                        bootup_progress = min(1, elapsed_time / 30.0)
-                        progress =  bootup_progress * 25
-                        
-                        if elapsed_time > 10:  # Show bootup progress after 2 seconds
-                            self.output_received.emit(f"Initializing {step_name}... ({bootup_progress*100:.1f}%)")
+                        progress = min(25, (elapsed_time / 10.0) * 25)
+                    else:
+                        # Processing phase: 25% to 95% over remaining time
+                        progress = min(95, 25 + ((elapsed_time - 10) / 60.0) * 70)  # Assume 60 seconds total
                     
                     self.progress_updated.emit(int(progress), f"{step_name} in progress...")
+                    
+                    # Show progress message
+                    if elapsed_time > 5:
+                        self.output_received.emit(f"Processing... ({int(progress)}%)")
+                
+                # Small delay to prevent excessive CPU usage
+                time.sleep(0.1)
             
             # Wait for process to complete
             return_code = self.process.wait()
@@ -349,7 +353,7 @@ class ProcessingWorker(QThread):
         self.current_frame = 0
         self.frames_processed = 0
         self.bootup_start_time = None
-        if self.current_step <= 3:
+        if self.current_step <= 5:
             self.start()
     
     def get_progress_info(self):
@@ -375,7 +379,7 @@ class ProcessingDialog(QDialog):
         self.video_folder = video_folder 
         self.worker = None
         self.current_step = 0
-        self.step_names = ["Player Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation", "Field Video Rendering"]
+        self.step_names = ["Player Detection", "Yard Marker Detection", "Correspondence Points Generation", "Render Correspondence Points", "Homography Transformation", "Field Video Rendering"]
         self.progress_timer = QTimer()
         self.progress_timer.timeout.connect(self.update_progress_timer)
         self.setup_ui()

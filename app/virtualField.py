@@ -1,5 +1,9 @@
-from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QSlider
+from PySide6.QtCore import Qt, QTimer
+import subprocess
+import platform
+import cv2
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -102,13 +106,14 @@ def draw_yard_marker_dots(ax, correspondence_points=None):
                 ha='center', va='bottom', zorder=11, 
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
 
-def update_field_with_correspondence_points(parent, correspondence_file):
+def update_field_with_correspondence_points(parent, correspondence_file, frame_number=0):
     """
     Update the virtual field to show yard marker dots from correspondence points
     
     Args:
         parent: Main window parent
         correspondence_file: Path to correspondence points JSON file
+        frame_number: Frame number to display (for per-frame correspondence points)
     """
     import json
     
@@ -117,7 +122,22 @@ def update_field_with_correspondence_points(parent, correspondence_file):
             with open(correspondence_file, 'r') as f:
                 correspondence_data = json.load(f)
             
-            correspondence_points = correspondence_data.get('correspondences', [])
+            # Check if this is per-frame data or single correspondence points
+            if 'frame_correspondences' in correspondence_data:
+                # Per-frame correspondence points
+                frame_correspondences = correspondence_data.get('frame_correspondences', {})
+                correspondence_points = frame_correspondences.get(str(frame_number), [])
+                
+                if not correspondence_points:
+                    # Try to find the closest frame with correspondence points
+                    available_frames = [int(f) for f in frame_correspondences.keys() if frame_correspondences[f]]
+                    if available_frames:
+                        closest_frame = min(available_frames, key=lambda x: abs(x - frame_number))
+                        correspondence_points = frame_correspondences.get(str(closest_frame), [])
+                        print(f"Using correspondence points from frame {closest_frame} (requested: {frame_number})")
+            else:
+                # Single correspondence points (legacy format)
+                correspondence_points = correspondence_data.get('correspondences', [])
             
             # Clear and redraw field with yard marker dots
             if hasattr(parent, 'field_axes'):
@@ -125,11 +145,125 @@ def update_field_with_correspondence_points(parent, correspondence_file):
                 draw_field(parent.field_axes, correspondence_points)
                 parent.field_canvas.draw()
                 
+                # Update title to show frame number if using per-frame data
+                if 'frame_correspondences' in correspondence_data:
+                    parent.field_axes.set_title(f"Virtual Field - Frame {frame_number} ({len(correspondence_points)} points)", 
+                                              color='white', fontsize=12)
+                
         else:
             print(f"Correspondence file not found: {correspondence_file}")
             
     except Exception as e:
         print(f"Error updating field with correspondence points: {e}")
+
+def load_correspondence_video(parent):
+    """Load the correspondence points video for playback"""
+    try:
+        # Try to find the correspondence video file
+        cache_dir = "cache"
+        video_files = []
+        
+        if os.path.exists(cache_dir):
+            for root, dirs, files in os.walk(cache_dir):
+                for file in files:
+                    if file.endswith("_correspondence_video.mp4"):
+                        video_files.append(os.path.join(root, file))
+        
+        if video_files:
+            # Get the most recent video file
+            latest_video = max(video_files, key=os.path.getmtime)
+            
+            # Load video
+            if hasattr(parent, 'video_cap') and parent.video_cap:
+                parent.video_cap.release()
+            
+            parent.video_cap = cv2.VideoCapture(latest_video)
+            if parent.video_cap.isOpened():
+                total_frames = int(parent.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                parent.frame_slider.setMaximum(total_frames - 1)
+                parent.frame_slider.setValue(0)
+                parent.frame_label.setText(f"0 / {total_frames}")
+                
+                # Load first frame
+                show_video_frame(parent, 0)
+                
+                print(f"Loaded correspondence points video: {latest_video}")
+                return True
+            else:
+                print("Failed to open video file")
+                return False
+        else:
+            print("No correspondence points video found. Please run the processing pipeline first.")
+            return False
+            
+    except Exception as e:
+        print(f"Error loading correspondence points video: {e}")
+        return False
+
+def show_video_frame(parent, frame_number):
+    """Display a specific video frame"""
+    if not hasattr(parent, 'video_cap') or not parent.video_cap:
+        return
+    
+    try:
+        parent.video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        ret, frame = parent.video_cap.read()
+        
+        if ret:
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Clear the field and show video frame
+            parent.field_axes.clear()
+            parent.field_axes.imshow(frame_rgb)
+            parent.field_axes.axis('off')
+            parent.field_canvas.draw()
+            
+            # Update frame counter
+            total_frames = int(parent.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            parent.frame_label.setText(f"{frame_number} / {total_frames}")
+            
+    except Exception as e:
+        print(f"Error displaying video frame: {e}")
+
+def toggle_video_playback(parent):
+    """Toggle video play/pause"""
+    if not hasattr(parent, 'video_cap') or not parent.video_cap:
+        # Try to load video first
+        if load_correspondence_video(parent):
+            parent.video_timer.start(33)  # ~30 FPS
+            parent.play_button.setText("⏸️ Pause")
+        return
+    
+    if parent.video_timer.isActive():
+        parent.video_timer.stop()
+        parent.play_button.setText("▶️ Play")
+    else:
+        parent.video_timer.start(33)  # ~30 FPS
+        parent.play_button.setText("⏸️ Pause")
+
+def next_video_frame(parent):
+    """Advance to next video frame"""
+    if not hasattr(parent, 'video_cap') or not parent.video_cap:
+        return
+    
+    current_frame = int(parent.video_cap.get(cv2.CAP_PROP_POS_FRAMES))
+    total_frames = int(parent.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    if current_frame < total_frames - 1:
+        show_video_frame(parent, current_frame + 1)
+        parent.frame_slider.setValue(current_frame + 1)
+    else:
+        # End of video - pause
+        parent.video_timer.stop()
+        parent.play_button.setText("▶️ Play")
+
+def seek_video_frame(parent, frame_number):
+    """Seek to a specific video frame"""
+    if not hasattr(parent, 'video_cap') or not parent.video_cap:
+        return
+    
+    show_video_frame(parent, frame_number)
 
 def toggle_scoreboard(parent, button):
     """Toggle scoreboard visibility"""
@@ -141,70 +275,69 @@ def toggle_scoreboard(parent, button):
 
 def create_dock_title_bar(dock, parent):
     """Create a custom title bar for the dock widget with scoreboard toggle"""
-    from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton
+    from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QFont
     
     title_bar = QWidget()
-    title_bar.setFixedHeight(30)
     title_bar.setStyleSheet("""
         QWidget {
-            background-color: #2b2b2b;
-            border-bottom: 1px solid #555555;
-        }
-        QLabel {
-            color: white;
-            font-weight: bold;
-        }
-        QPushButton {
-            background-color: transparent;
+            background-color: #3c3c3c;
             border: none;
-            color: white;
-            padding: 4px;
-            border-radius: 3px;
-            font-size: 12px;
-        }
-        QPushButton:hover {
-            background-color: #404040;
-        }
-        QPushButton:pressed {
-            background-color: #505050;
+            padding: 2px;
         }
     """)
     
     layout = QHBoxLayout()
-    layout.setContentsMargins(8, 4, 8, 4)
-    layout.setSpacing(8)
+    layout.setContentsMargins(5, 2, 5, 2)
+    layout.setSpacing(5)
     
-    # Left spacer to center the title
-    left_spacer = QWidget()
-    left_spacer.setFixedWidth(40)  # Space for buttons on the right
-    layout.addWidget(left_spacer)
-    
-    # Title label (centered)
-    title_label = QLabel("Virtual Field")
-    title_label.setFont(QFont("Arial", 10, QFont.Bold))
-    title_label.setAlignment(Qt.AlignCenter)
+    # Title label
+    title_label = QLabel(dock.windowTitle())
+    title_label.setStyleSheet("color: white; font-weight: bold;")
     layout.addWidget(title_label)
     
-    # Right spacer to balance the left spacer
-    right_spacer = QWidget()
-    right_spacer.setFixedWidth(40)  # Space for buttons on the right
-    layout.addWidget(right_spacer)
+    layout.addStretch()
     
-    # Scoreboard toggle button (small icon)
+    # Scoreboard toggle button
     scoreboard_btn = QPushButton("📊")
-    scoreboard_btn.setFixedSize(20, 20)
     scoreboard_btn.setCheckable(True)
-    scoreboard_btn.setChecked(True)  # Scoreboard visible by default
+    scoreboard_btn.setChecked(True)  # Start with scoreboard visible
     scoreboard_btn.setToolTip("Toggle Scoreboard")
+    scoreboard_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: #45a049;
+        }
+        QPushButton:checked {
+            background-color: #2196F3;
+        }
+    """)
     scoreboard_btn.clicked.connect(lambda: toggle_scoreboard(parent, scoreboard_btn))
     layout.addWidget(scoreboard_btn)
     
-    # Close button (X)
+    # Close button
     close_btn = QPushButton("✕")
-    close_btn.setFixedSize(20, 20)
-    close_btn.setToolTip("Close")
+    close_btn.setToolTip("Close Dock")
+    close_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: #d32f2f;
+        }
+    """)
     close_btn.clicked.connect(dock.close)
     layout.addWidget(close_btn)
     
@@ -228,8 +361,9 @@ def create_virtual_field_dock(parent):
     scoreboard_widget = create_scoreboard(parent)
     layout.addWidget(scoreboard_widget)
     
-    # Create matplotlib figure
-    fig = Figure(figsize=(8, 4), facecolor='#2b2b2b')
+    
+    # Create matplotlib figure (much larger size)
+    fig = Figure(figsize=(16, 10), facecolor='#2b2b2b')
     canvas = FigureCanvas(fig)
     canvas.setStyleSheet("background-color: #2b2b2b;")
     
@@ -245,127 +379,171 @@ def create_virtual_field_dock(parent):
     parent.field_canvas = canvas
     
     layout.addWidget(canvas)
+    
+    # Add video controls
+    video_controls_layout = QHBoxLayout()
+    
+    # Play/Pause button
+    play_button = QPushButton("▶️ Play")
+    play_button.setStyleSheet("""
+        QPushButton {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #1976D2;
+        }
+    """)
+    play_button.clicked.connect(lambda: toggle_video_playback(parent))
+    video_controls_layout.addWidget(play_button)
+    
+    # Frame slider
+    frame_slider = QSlider(Qt.Horizontal)
+    frame_slider.setMinimum(0)
+    frame_slider.setMaximum(100)
+    frame_slider.setValue(0)
+    frame_slider.setStyleSheet("""
+        QSlider::groove:horizontal {
+            border: 1px solid #999999;
+            height: 8px;
+            background: #333333;
+            border-radius: 4px;
+        }
+        QSlider::handle:horizontal {
+            background: #4CAF50;
+            border: 1px solid #4CAF50;
+            width: 18px;
+            margin: -5px 0;
+            border-radius: 9px;
+        }
+    """)
+    frame_slider.valueChanged.connect(lambda value: seek_video_frame(parent, value))
+    video_controls_layout.addWidget(frame_slider)
+    
+    # Frame counter
+    frame_label = QLabel("0 / 0")
+    frame_label.setStyleSheet("color: white; font-weight: bold;")
+    video_controls_layout.addWidget(frame_label)
+    
+    layout.addLayout(video_controls_layout)
+    
+    # Store video control references
+    parent.play_button = play_button
+    parent.frame_slider = frame_slider
+    parent.frame_label = frame_label
+    parent.video_cap = None
+    parent.video_timer = QTimer()
+    parent.video_timer.timeout.connect(lambda: next_video_frame(parent))
     main_widget.setLayout(layout)
     dock.setWidget(main_widget)
     
     return dock
 
 def create_scoreboard(parent):
-    """Create a scoreboard widget with empty data fields"""
+    """Create a scoreboard widget with orange football scoreboard design"""
     from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QFont
     
-    scoreboard = QWidget()
-    scoreboard.setFixedHeight(170)
-    scoreboard.setStyleSheet("""
-        QWidget {
-            background-color: #1a1a1a;
-            border: 2px solid #444444;
-            border-radius: 8px;
-        }
-        QLabel {
-            color: white;
-            font-weight: bold;
+    scoreboard_widget = QFrame()
+    scoreboard_widget.setStyleSheet("""
+        QFrame {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                stop:0 #FF6B35, stop:1 #E55A2B);
+            border: 3px solid #FF8C42;
+            border-radius: 12px;
+            padding: 15px;
         }
     """)
     
-    # Main layout
-    main_layout = QHBoxLayout()
-    main_layout.setContentsMargins(15, 10, 15, 10)
-    main_layout.setSpacing(20)
+    layout = QHBoxLayout()
+    layout.setSpacing(30)
+    layout.setContentsMargins(20, 15, 20, 15)
     
-    # Left team section
-    left_team_layout = QVBoxLayout()
-    left_team_layout.setAlignment(Qt.AlignCenter)
+    # Home team section
+    home_layout = QVBoxLayout()
+    home_layout.setAlignment(Qt.AlignCenter)
+    home_team_label = QLabel("HOME")
+    home_team_label.setStyleSheet("""
+        color: white; 
+        font-weight: bold; 
+        font-size: 16px;
+        background-color: rgba(0,0,0,0.3);
+        padding: 5px 10px;
+        border-radius: 5px;
+    """)
+    home_score_label = QLabel("0")
+    home_score_label.setStyleSheet("""
+        color: white; 
+        font-size: 36px; 
+        font-weight: bold;
+        background-color: rgba(0,0,0,0.4);
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: 2px solid rgba(255,255,255,0.3);
+    """)
+    home_layout.addWidget(home_team_label)
+    home_layout.addWidget(home_score_label)
+    layout.addLayout(home_layout)
     
-    left_team_name = QLabel("HOME")
-    left_team_name.setFont(QFont("Arial", 14, QFont.Bold))
-    left_team_name.setAlignment(Qt.AlignCenter)
-    left_team_name.setMinimumWidth(80)
-    left_team_layout.addWidget(left_team_name)
+    # Game info section
+    game_layout = QVBoxLayout()
+    game_layout.setAlignment(Qt.AlignCenter)
+    quarter_label = QLabel("Q1")
+    quarter_label.setStyleSheet("""
+        color: white; 
+        font-size: 20px; 
+        font-weight: bold;
+        background-color: rgba(0,0,0,0.3);
+        padding: 8px 15px;
+        border-radius: 6px;
+    """)
+    time_label = QLabel("15:00")
+    time_label.setStyleSheet("""
+        color: white; 
+        font-size: 24px; 
+        font-weight: bold;
+        background-color: rgba(0,0,0,0.4);
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: 2px solid rgba(255,255,255,0.3);
+    """)
+    game_layout.addWidget(quarter_label)
+    game_layout.addWidget(time_label)
+    layout.addLayout(game_layout)
     
-    left_score = QLabel("0")
-    left_score.setFont(QFont("Arial", 24, QFont.Bold))
-    left_score.setAlignment(Qt.AlignCenter)
-    left_score.setStyleSheet("color: #ff6600;")
-    left_team_layout.addWidget(left_score)
+    # Away team section
+    away_layout = QVBoxLayout()
+    away_layout.setAlignment(Qt.AlignCenter)
+    away_team_label = QLabel("AWAY")
+    away_team_label.setStyleSheet("""
+        color: white; 
+        font-weight: bold; 
+        font-size: 16px;
+        background-color: rgba(0,0,0,0.3);
+        padding: 5px 10px;
+        border-radius: 5px;
+    """)
+    away_score_label = QLabel("0")
+    away_score_label.setStyleSheet("""
+        color: white; 
+        font-size: 36px; 
+        font-weight: bold;
+        background-color: rgba(0,0,0,0.4);
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: 2px solid rgba(255,255,255,0.3);
+    """)
+    away_layout.addWidget(away_team_label)
+    away_layout.addWidget(away_score_label)
+    layout.addLayout(away_layout)
     
-    left_timeouts = QLabel("T.O.L: 3")
-    left_timeouts.setFont(QFont("Arial", 10))
-    left_timeouts.setAlignment(Qt.AlignCenter)
-    left_team_layout.addWidget(left_timeouts)
+    scoreboard_widget.setLayout(layout)
     
-    main_layout.addLayout(left_team_layout)
+    # Store reference for toggling
+    parent.scoreboard_widget = scoreboard_widget
     
-    # Center section (clock and game info)
-    center_layout = QVBoxLayout()
-    center_layout.setAlignment(Qt.AlignCenter)
-    
-    # Game clock
-    game_clock = QLabel("15:00")
-    game_clock.setFont(QFont("Arial", 20, QFont.Bold))
-    game_clock.setAlignment(Qt.AlignCenter)
-    game_clock.setStyleSheet("color: #ff6600;")
-    center_layout.addWidget(game_clock)
-    
-    # Game status
-    game_status = QLabel("1st Quarter")
-    game_status.setFont(QFont("Arial", 12))
-    game_status.setAlignment(Qt.AlignCenter)
-    game_status.setMinimumWidth(100)
-    center_layout.addWidget(game_status)
-    
-    # Down and distance
-    down_distance = QLabel("1st & 10")
-    down_distance.setFont(QFont("Arial", 14, QFont.Bold))
-    down_distance.setAlignment(Qt.AlignCenter)
-    down_distance.setStyleSheet("color: #ff6600;")
-    center_layout.addWidget(down_distance)
-    
-    # Ball position
-    ball_position = QLabel("Ball on: 25")
-    ball_position.setFont(QFont("Arial", 10))
-    ball_position.setAlignment(Qt.AlignCenter)
-    center_layout.addWidget(ball_position)
-    
-    main_layout.addLayout(center_layout)
-    
-    # Right team section
-    right_team_layout = QVBoxLayout()
-    right_team_layout.setAlignment(Qt.AlignCenter)
-    
-    right_team_name = QLabel("AWAY")
-    right_team_name.setFont(QFont("Arial", 14, QFont.Bold))
-    right_team_name.setAlignment(Qt.AlignCenter)
-    right_team_name.setMinimumWidth(80)
-    right_team_layout.addWidget(right_team_name)
-    
-    right_score = QLabel("0")
-    right_score.setFont(QFont("Arial", 24, QFont.Bold))
-    right_score.setAlignment(Qt.AlignCenter)
-    right_score.setStyleSheet("color: #ff6600;")
-    right_team_layout.addWidget(right_score)
-    
-    right_timeouts = QLabel("T.O.L: 3")
-    right_timeouts.setFont(QFont("Arial", 10))
-    right_timeouts.setAlignment(Qt.AlignCenter)
-    right_team_layout.addWidget(right_timeouts)
-    
-    main_layout.addLayout(right_team_layout)
-    
-    # Store references for later updates
-    parent.scoreboard_widget = scoreboard
-    parent.left_team_name = left_team_name
-    parent.left_score = left_score
-    parent.left_timeouts = left_timeouts
-    parent.right_team_name = right_team_name
-    parent.right_score = right_score
-    parent.right_timeouts = right_timeouts
-    parent.game_clock = game_clock
-    parent.game_status = game_status
-    parent.down_distance = down_distance
-    parent.ball_position = ball_position
-    
-    scoreboard.setLayout(main_layout)
-    return scoreboard
+    return scoreboard_widget
