@@ -243,7 +243,7 @@ def create_data_sheet_title_bar(dock, parent):
     
     # Left spacer to center the title
     left_spacer = QWidget()
-    left_spacer.setFixedWidth(40)  # Space for buttons on the right
+    left_spacer.setFixedWidth(60)  # Space for buttons on the right
     layout.addWidget(left_spacer)
     
     # Title label (centered)
@@ -254,12 +254,12 @@ def create_data_sheet_title_bar(dock, parent):
     
     # Right spacer to balance the left spacer
     right_spacer = QWidget()
-    right_spacer.setFixedWidth(40)  # Space for buttons on the right
+    right_spacer.setFixedWidth(60)  # Space for buttons on the right
     layout.addWidget(right_spacer)
     
     # Process button
     process_btn = QPushButton("Process")
-    process_btn.setFixedSize(50, 20)
+    process_btn.setFixedSize(60, 20)
     process_btn.setStyleSheet("""
         QPushButton {
             background-color: #0078d4;
@@ -280,6 +280,30 @@ def create_data_sheet_title_bar(dock, parent):
     process_btn.setToolTip("Process Selected Video")
     process_btn.clicked.connect(lambda: process_selected_video(parent))
     layout.addWidget(process_btn)
+    
+    # Batch Process button
+    batch_process_btn = QPushButton("Batch")
+    batch_process_btn.setFixedSize(60, 20)
+    batch_process_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #28a745;
+            border: none;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+            font-size: 10px;
+        }
+        QPushButton:hover {
+            background-color: #218838;
+        }
+        QPushButton:pressed {
+            background-color: #1e7e34;
+        }
+    """)
+    batch_process_btn.setToolTip("Batch Process All Videos in Folder")
+    batch_process_btn.clicked.connect(lambda: batch_process_videos(parent))
+    layout.addWidget(batch_process_btn)
     
     # Close button (X)
     close_btn = QPushButton("✕")
@@ -329,3 +353,9 @@ def process_selected_video(parent):
     except Exception as e:
         QMessageBox.critical(parent, "Error", f"An error occurred: {str(e)}")
         print(f"Error in process_selected_video: {str(e)}")
+
+def batch_process_videos(parent):
+    """Open batch processing dialog for all videos in current folder"""
+    from batchProcessingDialog import BatchProcessingDialog
+    dialog = BatchProcessingDialog(parent)
+    dialog.exec()

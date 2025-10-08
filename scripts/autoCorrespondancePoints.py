@@ -23,7 +23,6 @@ NCAA Standards:
 - Field length: 120 yards (100 + 2 endzones of 10 yards each)
 """
 
-import cv2
 import json
 import os
 import numpy as np
@@ -204,55 +203,6 @@ def average_detections_simple(detections):
     print(f"Averaged {len(detections)} detections for {detections[0].get('class')} (confidence: {avg_confidence:.3f})")
     return averaged_detection
 
-def detect_yard_markers(image_path, model):
-    """
-    Detect yard markers in the image using YOLO
-    
-    Args:
-        image_path: Path to input image
-        model: YOLO model for yard marker detection
-    
-    Returns:
-        List of detected yard markers with bounding boxes and labels
-    """
-    image = cv2.imread(image_path)
-    if image is None:
-        raise FileNotFoundError(f"Could not load image: {image_path}")
-    
-    # Run YOLO detection
-    results = model(image, verbose=False, conf=0.3)
-    
-    detections = []
-    for r in results:
-        for box in r.boxes:
-            cls_id = int(box.cls.cpu().item())
-            conf = float(box.conf.cpu().item())
-            label = model.names[cls_id]
-            
-            # Parse yard marker label (e.g., "fl1", "nr5", etc.)
-            if len(label) >= 3:  # Minimum length for valid yard marker
-                x1, y1, x2, y2 = box.xyxy[0].cpu().tolist()
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
-                width = x2 - x1
-                height = y2 - y1
-                
-                detections.append({
-                    "label": label,
-                    "confidence": conf,
-                    "bbox": {
-                        "x1": float(x1),
-                        "y1": float(y1),
-                        "x2": float(x2),
-                        "y2": float(y2),
-                        "center_x": float(center_x),
-                        "center_y": float(center_y),
-                        "width": float(width),
-                        "height": float(height)
-                    }
-                })
-    
-    return detections
 
 def parse_yard_marker_label(label):
     """
@@ -284,69 +234,6 @@ def parse_yard_marker_label(label):
         "original_label": label
     }
 
-def calculate_field_coordinates(parsed_label, bbox, image_width, image_height):
-    """
-    Calculate field coordinates based on NCAA standards
-    
-    Args:
-        parsed_label: Parsed yard marker information
-        bbox: Bounding box of the detection
-        image_width: Width of the input image
-        image_height: Height of the input image
-    
-    Returns:
-        Dictionary with field coordinates in feet
-    """
-    if not parsed_label:
-        return None
-    
-    # Get image center and dimensions
-    image_center_x = image_width / 2
-    image_center_y = image_height / 2
-    
-    # Calculate relative position from image center
-    rel_x = (bbox["center_x"] - image_center_x) / image_width
-    rel_y = (bbox["center_y"] - image_center_y) / image_height
-    
-    # Convert to field coordinates (in feet)
-    # Assuming the field spans most of the image width
-    field_x = rel_x * FIELD_LENGTH_FT + FIELD_LENGTH_FT / 2  # Center at 50-yard line
-    field_y = rel_y * FIELD_WIDTH_FT + FIELD_WIDTH_FT / 2   # Center at field middle
-    
-    # Adjust based on yard marker position
-    yard_number = parsed_label["yard_number"]
-    near_far = parsed_label["near_far"]
-    left_right = parsed_label["left_right"]
-    
-    # Calculate expected yard line position
-    # nr1 = 10-yard marker, nr2 = 20-yard marker, etc.
-    # fr1 = 10-yard marker, fr2 = 20-yard marker, etc.
-    if yard_number == 5:  # Special case for 5-yard markers
-        expected_yard_line = 5 if near_far == 'n' else 115  # Near 5 or far 5
-    else:
-        # Regular yard markers (1-4) - the number IS the yard line
-        expected_yard_line = yard_number * 10  # 1→10, 2→20, 3→30, 4→40
-    
-    # Calculate expected hash mark position
-    # All markers are 9 yards (27 feet) from their respective sideline
-    if near_far == 'n':  # Near side markers - 9 yards from bottom sideline
-        expected_hash_y = 27  # 9 yards * 3 feet/yard = 27 feet from bottom
-    else:  # Far side markers - 9 yards from top sideline  
-        expected_hash_y = FIELD_WIDTH_FT - 27  # 160 - 27 = 133 feet from bottom (9 yards from top)
-    
-    # Refine coordinates based on expected positions
-    # Virtual field expects coordinates in yards, not feet
-    field_x = expected_yard_line  # Already in yards
-    field_y = expected_hash_y / 3.0  # Convert feet to yards
-    
-    return {
-        "x": field_x,
-        "y": field_y,
-        "yard_line": expected_yard_line,
-        "hash_side": left_right,
-        "near_far": near_far,
-        "yard_number": yard_number
-    }
 
 def process_yard_marker_detections_per_frame(detection_json_path, confidence_threshold=0.7):
     """
@@ -502,65 +389,6 @@ def process_yard_marker_detections(detection_json_path, confidence_threshold=0.7
     print(f"Created {len(correspondence_points)} correspondence points")
     return correspondence_points
 
-def findCorrespondancePoints(image_path, model_path="yolo_models/yardMarkerDetector.pt"):
-    """
-    Find correspondence points using automated yard marker detection
-    
-    Args:
-        image_path: Path to reference image
-        model_path: Path to YOLO model for yard marker detection
-    
-    Returns:
-        List of correspondence points
-    """
-    # Load model
-    model = load_yard_marker_model(model_path)
-    if model is None:
-        return []
-    
-    # Detect yard markers
-    detections = detect_yard_markers(image_path, model)
-    print(f"Detected {len(detections)} yard markers")
-    
-    # Load image to get dimensions
-    image = cv2.imread(image_path)
-    image_height, image_width = image.shape[:2]
-    
-    correspondence_points = []
-    
-    for detection in detections:
-        # Parse the yard marker label
-        parsed = parse_yard_marker_label(detection["label"])
-        if not parsed:
-            continue
-        
-        # Calculate field coordinates
-        field_coords = calculate_field_coordinates(
-            parsed, detection["bbox"], image_width, image_height
-        )
-        
-        if field_coords:
-            correspondence_points.append({
-                "image_point": {
-                    "x": detection["bbox"]["center_x"],
-                    "y": detection["bbox"]["center_y"]
-                },
-                "field_point": {
-                    "x": field_coords["x"],
-                    "y": field_coords["y"]
-                },
-                "yard_marker_info": {
-                    "label": detection["label"],
-                    "yard_line": field_coords["yard_line"],
-                    "hash_side": field_coords["hash_side"],
-                    "near_far": field_coords["near_far"],
-                    "yard_number": field_coords["yard_number"],
-                    "confidence": detection["confidence"]
-                }
-            })
-    
-    print(f"Generated {len(correspondence_points)} correspondence points")
-    return correspondence_points
 
 def save_correspondence_points(points, output_path):
     """
@@ -629,31 +457,6 @@ def save_correspondence_points_per_frame(frame_correspondences, output_path):
     
     print(f"Per-frame correspondence points saved to: {output_path}")
 
-def validate_correspondence_points(points):
-    """
-    Validate that we have enough correspondence points for homography
-    
-    Args:
-        points: List of correspondence points
-    
-    Returns:
-        Boolean indicating if we have sufficient points
-    """
-    if len(points) < 4:
-        print(f"Warning: Only {len(points)} correspondence points found. Need at least 4 for homography.")
-        return False
-    
-    # Check for diversity in yard lines
-    yard_lines = set()
-    for point in points:
-        yard_lines.add(point["yard_marker_info"]["yard_line"])
-    
-    if len(yard_lines) < 2:
-        print(f"Warning: Only {len(yard_lines)} unique yard lines found. Need at least 2 for good homography.")
-        return False
-    
-    print(f"✓ Found {len(points)} correspondence points across {len(yard_lines)} yard lines")
-    return True
 
 def main():
     """Main function for standalone execution"""

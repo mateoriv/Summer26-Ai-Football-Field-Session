@@ -425,27 +425,58 @@ class ProcessingWorker(QThread):
                     self.process.terminate()
                     return False
                 
-                # Simple progress update every 0.5 seconds
+                
+                import select
+                if select.select([self.process.stdout], [], [], 1)[0]:  # 1 second timeout
+                    line = self.process.stdout.readline()
+                    if line:
+                        line = line.strip()
+                        if line:
+                            self.output_received.emit(line)
+                            line_count += 1
+                            
+                            # Look for frame processing indicators in the output
+                            if "frame" in line.lower() or "processing" in line.lower():
+                                # Try to extract frame numbers from output
+                                import re
+                                # Look for patterns like "Processed frame 150/1000" or "frame 150"
+                                frame_match = re.search(r'frame\s*(\d+)(?:/(\d+))?', line.lower())
+                                if frame_match:
+                                    self.current_frame = int(frame_match.group(1))
+                                    self.frames_processed = self.current_frame
+                                    
+                                    # If we start getting frame data, we're past bootup
+                                    if self.bootup_start_time is None:
+                                        self.bootup_start_time = time.time() - start_time
+                
+                # Update progress every 0.1 seconds regardless of output
                 elapsed_time = time.time() - start_time
-                if elapsed_time - last_update_time >= 0.5:
+                if elapsed_time - last_update_time >= 0.1:
                     last_update_time = elapsed_time
                     
-                    # Calculate progress based on elapsed time (simplified approach)
-                    if elapsed_time < 10:
-                        # Bootup phase: 0% to 25% over 10 seconds
-                        progress = min(25, (elapsed_time / 10.0) * 25)
+                    # Calculate progress based on phase
+                    if self.bootup_start_time is not None:
+                        # Frame processing phase: 25% to 100% based on actual frames
+                        if self.total_frames > 0 and self.current_frame > 0:
+                            frame_progress = self.current_frame / self.total_frames
+                            # 25% + (75% * frame_progress) = 25% to 100%
+                            progress = (0.25 + 0.75 * frame_progress) * 100
+                            
+                            # Show detailed progress every 10 frames to avoid spam
+                            if self.current_frame % 10 == 0:
+                                self.output_received.emit(f"Processing frame {self.current_frame}/{self.total_frames} ({frame_progress*100:.1f}%)")
+                        else:
+                            # Frame data started but no current frame yet - stay at 25%
+                            progress = progress_start + (progress_end - progress_start) * 0.25
                     else:
-                        # Processing phase: 25% to 95% over remaining time
-                        progress = min(95, 25 + ((elapsed_time - 10) / 60.0) * 70)  # Assume 60 seconds total
+                        # Bootup phase: 0% to 25% over 10 seconds
+                        bootup_progress = min(1, elapsed_time / 30.0)
+                        progress =  bootup_progress * 25
+                        
+                        # if elapsed_time > 10:  # Show bootup progress after 2 seconds
+                        #     self.output_received.emit(f"Initializing {step_name}... ({bootup_progress*100:.1f}%)")
                     
                     self.progress_updated.emit(int(progress), f"{step_name} in progress...")
-                    
-                    # Show progress message
-                    if elapsed_time > 5:
-                        self.output_received.emit(f"Processing... ({int(progress)}%)")
-                
-                # Small delay to prevent excessive CPU usage
-                time.sleep(0.1)
             
             # Wait for process to complete
             return_code = self.process.wait()

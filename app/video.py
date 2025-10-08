@@ -24,7 +24,8 @@ class CustomVideoWidget(QWidget):
         self.detection_data = None
         self.yard_marker_data = None
         self.current_frame = 0
-        self.show_boxes = True
+        self.show_boxes = False
+        self.show_yard_marker_boxes = False
         self.overlay_items = []
         self.cap = None
         self.total_frames = 0
@@ -48,6 +49,11 @@ class CustomVideoWidget(QWidget):
     def set_show_boxes(self, show):
         """Set whether to show player bounding boxes."""
         self.show_boxes = show
+        self.update()
+    
+    def set_show_yard_marker_boxes(self, show):
+        """Set whether to show yard marker bounding boxes."""
+        self.show_yard_marker_boxes = show
         self.update()
     
     def update_frame(self):
@@ -110,7 +116,7 @@ class CustomVideoWidget(QWidget):
                 if self.show_boxes and self.detection_data:
                     video_data_sources.append(self.detection_data)
                 
-                if hasattr(self.parent_window, 'show_yard_marker_boxes') and self.parent_window.show_yard_marker_boxes and self.yard_marker_data:
+                if self.show_yard_marker_boxes and self.yard_marker_data:
                     video_data_sources.append(self.yard_marker_data)
 
                 for data in video_data_sources:
@@ -619,10 +625,10 @@ def create_video_title_bar(dock):
     layout.addWidget(right_spacer)
     
     # Player bounding boxes checkbox
-    bbox_checkbox = QPushButton("📦")
-    bbox_checkbox.setFixedSize(20, 20)
+    bbox_checkbox = QPushButton("Players")
+    bbox_checkbox.setFixedSize(50, 20)
     bbox_checkbox.setCheckable(True)
-    bbox_checkbox.setChecked(True)
+    bbox_checkbox.setChecked(False)
     bbox_checkbox.setToolTip("Toggle Player Bounding Boxes")
     bbox_checkbox.setStyleSheet("""
         QPushButton {
@@ -647,8 +653,8 @@ def create_video_title_bar(dock):
     layout.addWidget(bbox_checkbox)
     
     # Yard marker bounding boxes checkbox
-    yard_marker_checkbox = QPushButton("🏈")
-    yard_marker_checkbox.setFixedSize(20, 20)
+    yard_marker_checkbox = QPushButton("Yard")
+    yard_marker_checkbox.setFixedSize(50, 20)
     yard_marker_checkbox.setCheckable(True)
     yard_marker_checkbox.setChecked(False)
     yard_marker_checkbox.setToolTip("Toggle Yard Marker Bounding Boxes")
@@ -671,7 +677,7 @@ def create_video_title_bar(dock):
             background-color: #28a745;
         }
     """)
-    yard_marker_checkbox.clicked.connect(lambda: toggle_yard_marker_boxes(dock.parent(), yard_marker_checkbox))
+    yard_marker_checkbox.clicked.connect(lambda: toggle_bounding_boxes(dock.parent(), yard_marker_checkbox))
     layout.addWidget(yard_marker_checkbox)
     
     # Close button (X)
@@ -832,7 +838,12 @@ def create_video_dock(parent):
     main_widget.setLayout(main_layout)
     dock.setWidget(main_widget)
 
-    parent.show_bounding_boxes = True
+    parent.show_bounding_boxes = False
+    parent.show_yard_marker_boxes = False
+    
+    # Sync the video widget's internal state with the parent's button states
+    custom_video.set_show_boxes(False)
+    custom_video.set_show_yard_marker_boxes(False)
 
     return dock
 
@@ -907,50 +918,70 @@ def set_current_video_path(parent, video_path):
     
     load_video_for_custom_widget(parent, video_path)
     
-    if parent.show_bounding_boxes:
-        load_and_set_detection_data(parent, "players")
+    # Always load both player and yard marker detection data when switching videos
+    # The visibility is controlled by the toggle buttons, but data is always loaded
+    load_and_set_detection_data(parent, "players")
+    load_and_set_detection_data(parent, "yard_markers")
+    
+    # Sync the video widget's internal state with the parent's button states
+    if hasattr(parent, 'custom_video'):
+        parent.custom_video.set_show_boxes(parent.show_bounding_boxes)
+        parent.custom_video.set_show_yard_marker_boxes(parent.show_yard_marker_boxes)
 
 def toggle_bounding_boxes(parent, button):
-    """Toggle player bounding box visibility on the custom video widget"""
-    if not hasattr(parent, 'show_bounding_boxes'):
-        parent.show_bounding_boxes = True
+    """Toggle bounding box visibility on the custom video widget"""
+    # Determine box type from button text 
+    button_text = button.text().lower()
+    if "player" in button_text:
+        box_type = "players"
+    elif "yard" in button_text:
+        box_type = "yard_markers"
+    else:
+        print(f"Unknown button type: {button_text}")
+        return
     
-    parent.show_bounding_boxes = button.isChecked()
+    # Set up state variables based on box type
+    if box_type == "players":
+        state_attr = "show_bounding_boxes"
+        display_name = "Player Bounding boxes"
+        data_type = "players"
+        setter_method = "set_show_boxes"
+    elif box_type == "yard_markers":
+        state_attr = "show_yard_marker_boxes"
+        display_name = "Yard marker boxes"
+        data_type = "yard_markers"
+        setter_method = "set_show_yard_marker_boxes"
+    else:
+        print(f"Unknown box type: {box_type}")
+        return
+    
+    # Initialize state if it doesn't exist
+    if not hasattr(parent, state_attr):
+        setattr(parent, state_attr, False)
+    
+    # Update state from button
+    setattr(parent, state_attr, button.isChecked())
+    is_enabled = getattr(parent, state_attr)
     
     if hasattr(parent, 'custom_video'):
         custom_video = parent.custom_video
-        custom_video.set_show_boxes(parent.show_bounding_boxes)
         
-        if parent.show_bounding_boxes:
-            print("Player Bounding boxes: ON")
-            load_and_set_detection_data(parent, "players")
-            custom_video.force_update()
+        # Set the widget's internal state
+        getattr(custom_video, setter_method)(is_enabled)
+        
+        if is_enabled:
+            print(f"{display_name}: ON")
+            load_and_set_detection_data(parent, data_type)
+            if box_type == "players":
+                custom_video.force_update()
         else:
-            print("Player Bounding boxes: OFF")
+            print(f"{display_name}: OFF")
     else:
         print("No custom video widget found!")
 
 def toggle_yard_marker_boxes(parent, button):
-    """Toggle yard marker bounding box visibility on the custom video widget"""
-    if not hasattr(parent, 'show_yard_marker_boxes'):
-        parent.show_yard_marker_boxes = False
-    
-    parent.show_yard_marker_boxes = button.isChecked()
-    
-    if hasattr(parent, 'custom_video'):
-        custom_video = parent.custom_video
-        
-        if parent.show_yard_marker_boxes:
-            print("Yard marker boxes: ON")
-            load_and_set_detection_data(parent, "yard_markers")
-            custom_video.force_update()
-        else:
-            print("Yard marker boxes: OFF")
-            if hasattr(custom_video, 'yard_marker_data'):
-                custom_video.yard_marker_data = None
-                custom_video.update()
-    else:
-        print("No custom video widget found!")
+    """Toggle yard marker bounding box visibility - wrapper for unified function"""
+    toggle_bounding_boxes(parent, button, "yard_markers")
 
 def load_and_set_detection_data(parent, data_type):
     """
