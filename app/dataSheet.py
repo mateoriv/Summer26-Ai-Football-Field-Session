@@ -193,6 +193,9 @@ def play_video_clip(parent, video_path, timestamp=None):
             parent.custom_video.current_frame = frame_number
             parent.custom_video.update()
             
+            # Update virtual field with current frame
+            parent.custom_video.update_virtual_field()
+            
             # Update progress slider
             if hasattr(parent, 'custom_video_total_frames'):
                 progress = int((frame_number / parent.custom_video_total_frames) * 100)

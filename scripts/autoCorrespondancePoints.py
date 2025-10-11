@@ -260,6 +260,7 @@ def process_yard_marker_detections_per_frame(detection_json_path, confidence_thr
     # Process each frame individually
     frame_correspondences = {}
     frames_with_points = 0
+    last_valid_correspondence_points = []  # Track last valid frame data
     
     for i, frame_data in enumerate(frames):
         frame_number = frame_data.get('frame_number', 0)
@@ -269,8 +270,13 @@ def process_yard_marker_detections_per_frame(detection_json_path, confidence_thr
         filtered_detections = filter_detections_by_confidence(frame_detections, confidence_threshold)
         
         if len(filtered_detections) < 4:
-            # Not enough detections for this frame
-            frame_correspondences[frame_number] = []
+            # Not enough detections for this frame - use last valid frame data
+            if last_valid_correspondence_points:
+                frame_correspondences[frame_number] = last_valid_correspondence_points.copy()
+                print(f"Frame {frame_number}: Insufficient points ({len(filtered_detections)}), using last valid frame data")
+            else:
+                frame_correspondences[frame_number] = []
+                print(f"Frame {frame_number}: Insufficient points ({len(filtered_detections)}) and no previous valid data")
             continue
         
         # Group detections by marker class for this frame
@@ -288,6 +294,7 @@ def process_yard_marker_detections_per_frame(detection_json_path, confidence_thr
         for detection in best_detections:
             field_coords = get_field_coordinates_for_marker(detection['class'])
             if field_coords:
+                last_field_coords = field_coords
                 correspondence_points.append({
                     "image_point": {
                         "x": detection["bbox"]["center_x"],
@@ -308,7 +315,9 @@ def process_yard_marker_detections_per_frame(detection_json_path, confidence_thr
         
         frame_correspondences[frame_number] = correspondence_points
         
+        # Update last valid correspondence points if this frame has sufficient points
         if len(correspondence_points) >= 4:
+            last_valid_correspondence_points = correspondence_points.copy()
             frames_with_points += 1
         
         # Progress update every 50 frames

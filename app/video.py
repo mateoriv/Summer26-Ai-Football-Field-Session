@@ -882,6 +882,9 @@ def seek_custom_video(parent, position):
         custom_video.current_frame = frame
         custom_video.update()
         
+        # Update virtual field with current frame
+        custom_video.update_virtual_field()
+        
         fps = custom_video.fps if custom_video.fps > 0 else 30.0
         current_time = frame / fps
         total_time = total_frames / fps
