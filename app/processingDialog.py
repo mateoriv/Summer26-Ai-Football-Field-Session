@@ -254,7 +254,8 @@ class ProcessingWorker(QThread):
                     "python", "scripts/autoCorrespondancePoints.py",
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
-                    "--confidence", "0.7"
+                    "--confidence", "0.7",
+                    "--per-frame"
                 ]
                 
                 if self.is_cancelled:
@@ -289,14 +290,13 @@ class ProcessingWorker(QThread):
                         return
                     else:  # rerun
                         self.output_received.emit(f"Re-running {step_name}...")
-                print("Reached here 2")
+                
                 self.progress_updated.emit(0, "Step 4: Initializing per-frame homography transformation...")
                 self.output_received.emit("Step 4: Running per-frame homography transformation...")
                 
                 correspondence_file = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
                 
                 if os.path.exists(correspondence_file):
-                    print("Reached here 3")
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
                     homography_cmd = [
                         "python", "scripts/perFrameHomographyTransform.py",
@@ -304,7 +304,7 @@ class ProcessingWorker(QThread):
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
                     ]
-                    print("Reached here 4")
+                
                     if self.is_cancelled:
                         return
                         
@@ -411,7 +411,7 @@ class ProcessingWorker(QThread):
             # Start the process with correct working directory and unbuffered output
             env = os.environ.copy()
             env['PYTHONUNBUFFERED'] = '1'
-            
+
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -422,18 +422,17 @@ class ProcessingWorker(QThread):
                 cwd=project_root,
                 env=env
             )
-        
+
             # Simple output reading with progress updates
             line_count = 0
             start_time = time.time()
             last_update_time = 0
-            
+
             while self.process.poll() is None:  # Process is still running
                 if self.is_cancelled:
                     self.process.terminate()
                     return False
-     
-                
+    
                 # Non-blocking output reading with select
                 import select
                 try:
