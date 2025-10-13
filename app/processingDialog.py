@@ -459,13 +459,6 @@ class ProcessingWorker(QThread):
                     # If readline fails, continue with timeout
                     pass
                 
-                # Add timeout to prevent infinite loop
-                current_time = time.time()
-                if current_time - start_time > 300:  # 5 minute timeout
-                    self.output_received.emit("Process timeout reached, terminating...")
-                    self.process.terminate()
-                    return False
-                
                 # Update frame tracking
                 self.frames_processed = self.current_frame
                 
