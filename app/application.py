@@ -88,10 +88,6 @@ class MainWindow(QMainWindow):
         window_menu.addAction(self.data_dock.toggleViewAction())
         window_menu.addAction(self.virtual_dock.toggleViewAction())
         
-        # Add scoreboard toggle action
-        scoreboard_action = QAction("Toggle Scoreboard", self)
-        scoreboard_action.triggered.connect(self.toggle_scoreboard)
-        window_menu.addAction(scoreboard_action)
         
         # Load settings and default folder after docks are created
         self.load_settings()
@@ -101,6 +97,7 @@ class MainWindow(QMainWindow):
         window_menu.addAction("Light", lambda: app.setPalette(get_light_palette()))
         window_menu.addAction("Dark", lambda: app.setPalette(get_dark_palette()))
         window_menu.addAction("System", lambda: apply_system_theme(app))
+
 
     def open_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Open Folder")
@@ -123,13 +120,6 @@ class MainWindow(QMainWindow):
     # def export_data(self):
     #     print("Exporting data... (stub)")
     
-    def toggle_scoreboard(self):
-        """Toggle scoreboard visibility in the virtual field dock"""
-        if hasattr(self, 'scoreboard_widget'):
-            if self.scoreboard_widget.isVisible():
-                self.scoreboard_widget.hide()
-            else:
-                self.scoreboard_widget.show()
     
     def set_equal_dock_sizes(self):
         """Set all dock widgets to equal sizes in a 2x2 grid"""
@@ -206,8 +196,14 @@ def apply_system_theme(app):
 
 
 if __name__ == "__main__":
+    # Set attribute BEFORE creating QApplication
+    QApplication.setAttribute(Qt.AA_DontUseNativeDialogs, False)
+    
     app = QApplication(sys.argv)
-    app.setStyle(QStyleFactory.create("Fusion"))
+    
+    # Remove Fusion style to allow native dialogs
+    #app.setStyle(QStyleFactory.create("windows11"))
+    
     apply_system_theme(app)
     window = MainWindow()
     window.show()
