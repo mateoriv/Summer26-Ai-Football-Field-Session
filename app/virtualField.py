@@ -88,9 +88,17 @@ class VirtualFieldWidget(QWidget):
         
         # Draw field background
         if self.field_image:
-            # Scale field image to fit widget
-            scaled_field = self.field_image.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            painter.drawPixmap(0, 0, scaled_field)
+            # Calculate field dimensions within the widget (accounting for aspect ratio)
+            field_width = min(self.width(), int(self.height() * 100 / 53.33))
+            field_height = min(self.height(), int(self.width() * 53.33 / 100))
+            
+            # Center the field in the widget
+            field_x_offset = (self.width() - field_width) // 2
+            field_y_offset = (self.height() - field_height) // 2
+            
+            # Scale field image to fit the calculated field dimensions
+            scaled_field = self.field_image.scaled(field_width, field_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            painter.drawPixmap(field_x_offset, field_y_offset, scaled_field)
         
         # Draw player dots if we have homography data
         if self.homography_data and 'normalized_positions' in self.homography_data:
@@ -99,10 +107,6 @@ class VirtualFieldWidget(QWidget):
             
             if frame_key in normalized_positions:
                 players = normalized_positions[frame_key]
-                
-                # Debug: Print player count
-                if players:
-                    print(f"Drawing {len(players)} players for frame {self.current_frame}")
                 
                 # Draw each player as a dot
                 for i, player in enumerate(players):
@@ -115,18 +119,27 @@ class VirtualFieldWidget(QWidget):
                     # Field is 100 yards long and 53.33 yards wide
                     # (0,0) is bottom left corner of the field
                     
-                    # Map X: 0-100 yards to 0-width pixels
-                    widget_x = int(x * self.width() / 100)
+                    # Calculate field dimensions within the widget (accounting for aspect ratio)
+                    field_width = min(self.width(), int(self.height() * 100 / 53.33))
+                    field_height = min(self.height(), int(self.width() * 53.33 / 100))
                     
-                    # Map Y: 0-53.33 yards to height-0 pixels (flip Y so 0,0 is bottom)
-                    widget_y = int(self.height() - (y * self.height() / 53.33))
+                    # Center the field in the widget
+                    field_x_offset = (self.width() - field_width) // 2
+                    field_y_offset = (self.height() - field_height) // 2
                     
-                    # Debug: Print coordinates
-                    if i < 3:  # Only print first 3 players to avoid spam
-                        print(f"Player {i}: field({x:.1f},{y:.1f}) -> widget({widget_x},{widget_y})")
+                    # Map X: 0-100 yards to field_width pixels
+                    widget_x = int(field_x_offset + (x * field_width / 100))
                     
-                    # Only draw if coordinates are within reasonable bounds
-                    if 0 <= widget_x <= self.width() and 0 <= widget_y <= self.height():
+                    # Map Y: 0-53.33 yards to field_height pixels (flip Y so 0,0 is bottom)
+                    widget_y = int(field_y_offset + field_height - (y * field_height / 53.33))
+                    
+                    # Only draw if coordinates are within field bounds
+                    field_left = field_x_offset
+                    field_right = field_x_offset + field_width
+                    field_top = field_y_offset
+                    field_bottom = field_y_offset + field_height
+                    
+                    if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
                         # Draw player dot - make it more visible
                         painter.setBrush(QBrush(QColor(255, 0, 0)))  # Red dot
                         painter.setPen(QPen(QColor(255, 255, 255), 3))  # Thicker white border
@@ -135,8 +148,7 @@ class VirtualFieldWidget(QWidget):
                         # Debug: Draw a small text label
                         painter.setPen(QPen(QColor(255, 255, 255)))
                         painter.drawText(widget_x + 10, widget_y, f"({x:.1f},{y:.1f})")
-                    else:
-                        print(f"Player {i} out of bounds: ({widget_x},{widget_y})")
+             
         
         # Draw frame number
         painter.setPen(QPen(QColor(0, 0, 0)))  # Black text
@@ -440,7 +452,7 @@ def create_dock_title_bar(dock, parent):
     # Scoreboard toggle button
     scoreboard_btn = QPushButton("📊")
     scoreboard_btn.setCheckable(True)
-    scoreboard_btn.setChecked(True)  # Start with scoreboard visible
+    scoreboard_btn.setChecked(False)  # Start with scoreboard hidden
     scoreboard_btn.setToolTip("Toggle Scoreboard")
     scoreboard_btn.setStyleSheet("""
         QPushButton {
@@ -499,6 +511,7 @@ def create_virtual_field_dock(parent):
     
     # Create scoreboard section
     scoreboard_widget = create_scoreboard(parent)
+    scoreboard_widget.hide()  # Start with scoreboard hidden
     layout.addWidget(scoreboard_widget)
     
     # Create the virtual field widget

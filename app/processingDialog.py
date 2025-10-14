@@ -320,77 +320,6 @@ class ProcessingWorker(QThread):
                     self.output_received.emit("No correspondence points found, skipping homography transformation")
                     self.step_completed.emit("Homography Transformation", False)
                     
-            elif self.current_step == 4:
-                # Step 5: Render Field Video
-                step_name = "Field Video Rendering"
-                self.output_received.emit(f"Step 5: Checking {step_name}...")
-                
-                # Check if step is already completed
-                if self.check_step_completed(4):
-                    self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 4)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name} - using existing video")
-                        self.step_completed.emit(step_name, True)
-                        # Complete processing
-                        self.processing_completed.emit({
-                            "detection_output": self.detection_output,
-                            "homography_output": self.homography_output,
-                            "field_video_output": f"{self.output_dir}/{self.video_folder}/field_video/{self.video_name}_field_video.mp4"
-                        })
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
-                
-                self.progress_updated.emit(0, "Step 5: Initializing field video rendering...")
-                self.output_received.emit("Step 5: Rendering field video...")
-                
-                if self.homography_output and os.path.exists(self.homography_output):
-         
-                    render_cmd = [
-                        "python", "scripts/renderFieldVideo.py",
-                        "--input", self.homography_output,
-                        "--output", field_video_output,
-                        "--fps", "30"
-                    ]
-                    
-                    if self.is_cancelled:
-                        return
-                        
-                    result = self._run_command(render_cmd, "Field Video Rendering", 0, 100)
-                    if result:
-                        self.step_completed.emit("Field Video Rendering", True)
-                        
-                        # Complete processing
-                        self.progress_updated.emit(100, "Processing completed successfully!")
-                        self.output_received.emit("Processing completed successfully!")
-                        
-                        # Return results
-                        results = {
-                            "video_path": self.video_path,
-                            "video_name": self.video_name,
-                            "detection_output": self.detection_output,
-                            "homography_output": self.homography_output,
-                            "field_video_output": field_video_output,
-                            "status": "completed"
-                        }
-                        
-                        # Save results to JSON
-                        results_file = f"{self.output_dir}/{self.video_folder}/results/{self.video_name}_results.json"
-                        with open(results_file, 'w') as f:
-                            json.dump(results, f, indent=2)
-                        
-                        self.output_received.emit(f"Results saved to: {results_file}")
-                        self.processing_completed.emit(results)
-                    else:
-                        self.step_completed.emit("Field Video Rendering", False)
-                else:
-                    self.output_received.emit("Skipping field video rendering (no homography data)")
-                    self.step_completed.emit("Field Video Rendering", False)
             
         except Exception as e:
             error_msg = f"Error during processing: {str(e)}"
@@ -461,9 +390,7 @@ class ProcessingWorker(QThread):
                 
                 # Update frame tracking
                 self.frames_processed = self.current_frame
-                
-               
-                
+        
                 # Update progress every 0.1 seconds regardless of output
                 elapsed_time = time.time() - start_time
                 if elapsed_time - last_update_time >= 0.1:
@@ -480,9 +407,6 @@ class ProcessingWorker(QThread):
                             # Show detailed progress every 10 frames to avoid spam
                             if self.current_frame % 10 == 0:
                                 self.output_received.emit(f"Processing frame {self.current_frame}/{self.total_frames} ({frame_progress*100:.1f}%)")
-                        else:
-                            # Frame data started but no current frame yet - stay at 25%
-                            progress = progress_start + (progress_end - progress_start) * 0.25
                     else:
                         # Bootup phase: 0% to 25% over 10 seconds
                         bootup_progress = min(1, elapsed_time / 30.0)
