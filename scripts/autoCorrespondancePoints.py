@@ -14,7 +14,7 @@ Features:
 - Maps yard marker classes to real-world field coordinates
 
 Yard marker format: (near/far)(left/right)(yardNumber)
-Possible values: fl1,fl2,fl3,fl4,f5,nl1,nl2,nl3,nl4,n5,nr1,nr2,nr3,nr4,nr5
+Possible values: fl1,fl2,fl3,fl4,f5,fr1,fr2,fr3,fr4,fr5,nl1,nl2,nl3,nl4,n5,nr1,nr2,nr3,nr4,nr5
 
 NCAA Standards:
 - Yard-line numbers: max 6 feet height, 4 feet width
@@ -210,23 +210,24 @@ def parse_yard_marker_label(label):
     Parse yard marker label to extract position and yard information
     
     Args:
-        label: Yard marker label (e.g., "fl1", "nr5")
+        label: Yard marker label (e.g., "fl1", "nr5", "n5", "f5")
     
     Returns:
         Dictionary with parsed information
     """
-    if len(label) < 3:
+    if len(label) < 2:
         return None
     
-    # Extract components
-    near_far = label[0]  # 'f' for far, 'n' for near
-    left_right = label[1]  # 'l' for left, 'r' for right
-    yard_str = label[2:]  # Yard number as string
-    
-    try:
-        yard_number = int(yard_str)
-    except ValueError:
-        return None
+    # Special case for n5 and f5 (no left/right component)
+    if label == "n5" or label == "f5":
+        near_far = label[0]  # 'f' for far, 'n' for near
+        yard_number = 5
+        left_right = None
+    else:
+        # Extract components for regular markers (fl1, nr2, etc.)
+        near_far = label[0]  # 'f' for far, 'n' for near
+        left_right = label[1]  # 'l' for left, 'r' for right
+        yard_number = label[2:]  # Yard number as string
     
     return {
         "near_far": near_far,

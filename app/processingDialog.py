@@ -16,6 +16,7 @@ import sys
 import json
 import time
 from pathlib import Path
+from gpu_utils import detect_gpu, get_optimal_device, get_processing_env_vars, print_gpu_status
 
 class ProcessingWorker(QThread):
     """Worker thread for processing video"""
@@ -66,9 +67,6 @@ class ProcessingWorker(QThread):
         elif step_index == 3:  # Homography Transformation
             homography_file = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
             return os.path.exists(homography_file)
-        elif step_index == 4:  # Field Video Rendering
-            field_video_file = f"{self.output_dir}/{self.video_folder}/field_video/{self.video_name}_field_video.mp4"
-            return os.path.exists(field_video_file)
         return False
     
     def ask_user_skip_step(self, step_name, step_index):
@@ -141,7 +139,6 @@ class ProcessingWorker(QThread):
             yard_marker_output = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
             correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
             self.homography_output = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
-            field_video_output = f"{self.output_dir}/{self.video_folder}/field_video/{self.video_name}_field_video.mp4"
         
             if self.current_step == 0:
                 # Step 1: Player Detection
@@ -338,8 +335,13 @@ class ProcessingWorker(QThread):
         
         try:
             # Start the process with correct working directory and unbuffered output
-            env = os.environ.copy()
+            env = get_processing_env_vars()  # Get GPU-optimized environment
             env['PYTHONUNBUFFERED'] = '1'
+            
+            # Print GPU status for first command
+            if not hasattr(self, '_gpu_status_printed'):
+                print_gpu_status()
+                self._gpu_status_printed = True
 
             self.process = subprocess.Popen(
                 cmd,
@@ -362,31 +364,45 @@ class ProcessingWorker(QThread):
                     self.process.terminate()
                     return False
     
-                # Non-blocking output reading with select
-                import select
+                # Cross-platform non-blocking output reading using threading
+                import threading
+                import queue
+                
+                # Create a queue for output lines
+                if not hasattr(self, 'output_queue'):
+                    self.output_queue = queue.Queue()
+                    self.output_thread = None
+                
+                # Start output reading thread if not already started
+                if self.output_thread is None or not self.output_thread.is_alive():
+                    self.output_queue = queue.Queue()
+                    self.output_thread = threading.Thread(target=self._read_output_thread, daemon=True)
+                    self.output_thread.start()
+                
+                # Process any available output from the queue (one line per iteration)
                 try:
-                    if select.select([self.process.stdout], [], [], 0.01)[0]:  # 10ms timeout
-                        line = self.process.stdout.readline()
-                        if line:
-                            line = line.strip()
-                            if line:
-                                self.output_received.emit(line)
-                                line_count += 1
-                                
-                                # Look for frame processing indicators in the output
-                                if "frame" in line.lower() or "processing" in line.lower():
-                                    # Try to extract frame numbers from output
-                                    import re
-                                    # Look for patterns like "Processed frame 150/1000" or "frame 150"
-                                    frame_match = re.search(r'frame\s*(\d+)(?:/(\d+))?', line.lower())
-                                    if frame_match:
-                                        self.current_frame = int(frame_match.group(1))
-                                         # If we start getting frame data, we're past bootup
-                                        if self.bootup_start_time is None:
-                                            self.bootup_start_time = time.time() - start_time
-                except:
-                    # If readline fails, continue with timeout
+                    line = self.output_queue.get_nowait()
+                    line = line.strip()
+                    print(line)
+                    if line:
+                        self.output_received.emit(line)
+                        line_count += 1
+                        
+                        # Look for frame processing indicators in the output
+                        if "frame" in line.lower() or "processing" in line.lower():
+                            # Try to extract frame numbers from output
+                            import re
+                            # Look for patterns like "Processed frame 150/1000" or "frame 150"
+                            frame_match = re.search(r'frame\s*(\d+)(?:/(\d+))?', line.lower())
+                            if frame_match:
+                                self.current_frame = int(frame_match.group(1))
+                                 # If we start getting frame data, we're past bootup
+                                if self.bootup_start_time is None:
+                                    self.bootup_start_time = time.time() - start_time
+                except queue.Empty:
+                    # No output available, continue
                     pass
+                
                 
                 # Update frame tracking
                 self.frames_processed = self.current_frame
@@ -397,20 +413,21 @@ class ProcessingWorker(QThread):
                     last_update_time = elapsed_time
     
                     # Calculate progress based on phase
+                    progress = 0  # Initialize progress variable
+                    
                     if self.bootup_start_time is not None:
                         # Frame processing phase: 25% to 100% based on actual frames
                         if self.total_frames > 0 and self.current_frame > 0:
                             frame_progress = self.current_frame / self.total_frames
                             # 25% + (75% * frame_progress) = 25% to 100%
                             progress = (0.25 + 0.75 * frame_progress) * 100
-                            
-                            # Show detailed progress every 10 frames to avoid spam
-                            if self.current_frame % 10 == 0:
-                                self.output_received.emit(f"Processing frame {self.current_frame}/{self.total_frames} ({frame_progress*100:.1f}%)")
+                        else:
+                            # Still in bootup phase even after bootup_start_time is set
+                            progress = 25
                     else:
-                        # Bootup phase: 0% to 25% over 10 seconds
+                        # Bootup phase: 0% to 25% over 30 seconds
                         bootup_progress = min(1, elapsed_time / 30.0)
-                        progress =  bootup_progress * 25
+                        progress = bootup_progress * 25
                         
                         # if elapsed_time > 10:  # Show bootup progress after 2 seconds
                         #     self.output_received.emit(f"Initializing {step_name}... ({bootup_progress*100:.1f}%)")
@@ -443,7 +460,7 @@ class ProcessingWorker(QThread):
         self.current_frame = 0
         self.frames_processed = 0
         self.bootup_start_time = None
-        if self.current_step <= 5:
+        if self.current_step <= 3:  # 4 steps: 0, 1, 2, 3
             self.start()
     
     def get_progress_info(self):
@@ -452,6 +469,18 @@ class ProcessingWorker(QThread):
             progress_percent = (self.frames_processed / self.total_frames) * 100
             return f"Frame {self.frames_processed}/{self.total_frames} ({progress_percent:.1f}%)"
         return "Processing..."
+    
+    def _read_output_thread(self):
+        """Background thread to read subprocess output"""
+        try:
+            while self.process and self.process.poll() is None:
+                line = self.process.stdout.readline()
+                if line:
+                    self.output_queue.put(line)
+                else:
+                    time.sleep(0.01)
+        except:
+            pass
     
     def cancel(self):
         """Cancel the processing"""
@@ -469,9 +498,9 @@ class ProcessingDialog(QDialog):
         self.video_folder = video_folder 
         self.worker = None
         self.current_step = 0
-        self.step_names = ["Player Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation", "Field Video Rendering"]
+        self.step_names = ["Player Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation"]
         self.progress_timer = QTimer()
-        self.progress_timer.timeout.connect(self.update_progress_timer)
+    
         self.setup_ui()
         self.start_processing()
     
@@ -479,8 +508,10 @@ class ProcessingDialog(QDialog):
         """Setup the dialog UI"""
         self.setWindowTitle("Processing Video")
         self.setModal(True)
-        self.setFixedSize(700, 600)
-        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+        # Make dialog resizable with minimum size
+        self.setMinimumSize(700, 600)
+        self.resize(900, 700)  # Default size, but user can resize
+        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.WindowMaximizeButtonHint)
         
         # Main layout
         layout = QVBoxLayout()
@@ -579,6 +610,8 @@ class ProcessingDialog(QDialog):
         self.terminal_output = QTextEdit()
         self.terminal_output.setReadOnly(True)
         self.terminal_output.setFont(QFont("Consolas", 10))
+        # Set minimum height for the terminal output
+        self.terminal_output.setMinimumHeight(200)
         self.terminal_output.setStyleSheet("""
             QTextEdit {
                 background-color: #0d1117;
@@ -706,24 +739,6 @@ class ProcessingDialog(QDialog):
             step_name = self.step_names[self.current_step]
             self.setWindowTitle(f"Processing Video - {step_name}")
     
-    def update_progress_timer(self):
-        """Timer-based progress update for smoother progress bar"""
-        if self.worker and self.worker.isRunning():
-            # Only update if we have frame data and are past bootup
-            if (hasattr(self.worker, 'bootup_start_time') and 
-                self.worker.bootup_start_time is not None and
-                hasattr(self.worker, 'total_frames') and 
-                hasattr(self.worker, 'current_frame') and
-                self.worker.total_frames > 0 and 
-                self.worker.current_frame > 0):
-                
-                # Gradually increase progress if no updates are coming (only during frame processing)
-                current_value = self.progress_bar.value()
-                if current_value < 95:  # Don't go to 100% until step completes
-                    new_value = min(95, current_value + 1)
-                    self.progress_bar.setValue(new_value)
-            # If we're still in bootup phase, do nothing - let main logic handle it
-    
     def add_output(self, text):
         """Add text to terminal output"""
         self.terminal_output.append(text)
@@ -741,8 +756,16 @@ class ProcessingDialog(QDialog):
         
         if success:
             self.add_output(f"{step_name} completed successfully!")
-            self.next_button.setEnabled(True)
-            self.next_button.setText(f"Next: {self.get_next_step_name()}")
+            
+            # Check if this was the final step
+            if self.current_step >= len(self.step_names) - 1:
+                # Final step completed - automatically finish processing
+                self.add_output("All processing steps completed!")
+                self.processing_completed({"homography_output": "Processing completed successfully"})
+            else:
+                # Not the final step - show next button
+                self.next_button.setEnabled(True)
+                self.next_button.setText(f"Next: {self.get_next_step_name()}")
         else:
             self.add_output(f"{step_name} failed!")
             self.next_button.setEnabled(False)
@@ -773,7 +796,7 @@ class ProcessingDialog(QDialog):
         self.progress_bar.setValue(100)
         self.status_label.setText("Processing completed successfully!")
         self.add_output("\nProcessing completed successfully!")
-        self.add_output(f"Results saved to: {results.get('field_video_output', 'N/A')}")
+        self.add_output(f"Results saved to: {results.get('homography_output', 'N/A')}")
         
         # Show close button and hide other buttons
         self.cancel_button.setVisible(False)

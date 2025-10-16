@@ -42,7 +42,7 @@ def get_homography_matrix(image_points, field_points):
     image_points = np.array(image_points, dtype=np.float32)
     field_points = np.array(field_points, dtype=np.float32)
 
-    H, _ = cv2.findHomography(image_points, field_points, cv2.RANSAC, 5.0)
+    H, _ = cv2.findHomography(image_points, field_points, cv2.LMEDS, 5.0)
     return H
 
 def transform_point(point_px, H):

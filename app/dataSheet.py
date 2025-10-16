@@ -324,6 +324,12 @@ def process_selected_video(parent):
     from PySide6.QtWidgets import QMessageBox
     from processingDialog import ProcessingDialog
     
+    # Stop video playback if it's currently playing
+    if hasattr(parent, 'custom_video') and parent.custom_video.is_playing:
+        parent.custom_video.toggle_playback()  # This will stop playback
+        parent.play_button.setText("▶")  # Update button to show play state
+        print("Video playback stopped before processing")
+    
     # Get the currently selected row
     selected_indexes = parent.tableView.selectionModel().selectedRows()
     if not selected_indexes:
@@ -359,6 +365,12 @@ def process_selected_video(parent):
 
 def batch_process_videos(parent):
     """Open batch processing dialog for all videos in current folder"""
+    # Stop video playback if it's currently playing
+    if hasattr(parent, 'custom_video') and parent.custom_video.is_playing:
+        parent.custom_video.toggle_playback()  # This will stop playback
+        parent.play_button.setText("▶")  # Update button to show play state
+        print("Video playback stopped before batch processing")
+    
     from batchProcessingDialog import BatchProcessingDialog
     dialog = BatchProcessingDialog(parent)
     dialog.exec()

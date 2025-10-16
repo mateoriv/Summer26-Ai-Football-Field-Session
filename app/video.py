@@ -225,7 +225,7 @@ class CustomVideoWidget(QWidget):
         
         # Draw label
         confidence = detection.get('confidence', 0.0)
-        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.setPen(QPen(QColor(0, 0, 0), 1))  # Red text
         painter.drawText(scaled_x, scaled_y - 5, f"{class_name} {confidence:.2f}")
         
     def force_update(self):
@@ -567,7 +567,7 @@ class BoundingBoxGraphicsView(QGraphicsView):
         
         text_item = QGraphicsTextItem(label_text)
         text_item.setPos(scaled_x, scaled_y - 25)
-        text_item.setDefaultTextColor(QColor(255, 255, 255))
+        text_item.setDefaultTextColor(QColor(0, 0, 0))  # Red text
         font = QFont("Arial", 10, QFont.Bold)
         text_item.setFont(font)
         self.scene.addItem(text_item)
@@ -722,6 +722,7 @@ def create_video_dock(parent):
     parent.custom_video = custom_video
 
     controls_widget = QWidget()
+    controls_widget.setFixedHeight(50)  # Fixed height for controls bar
     controls_widget.setStyleSheet("""
         QWidget {
             background-color: #2b2b2b;
@@ -845,7 +846,7 @@ def create_video_dock(parent):
     controls_layout.addWidget(parent.volume_slider)
 
     controls_widget.setLayout(controls_layout)
-    main_layout.addWidget(controls_widget, 1)
+    main_layout.addWidget(controls_widget)  # No stretch factor - fixed height
 
     main_widget.setLayout(main_layout)
     dock.setWidget(main_widget)
