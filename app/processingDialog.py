@@ -171,7 +171,7 @@ class ProcessingWorker(QThread):
                 
                 
                 detection_cmd = [
-                    "python", "scripts/playerDetection.py", 
+                    "python3", "scripts/playerDetection.py", 
                     "--video", self.video_path, 
                     "--output", self.detection_output
                 ]
@@ -210,7 +210,7 @@ class ProcessingWorker(QThread):
                 
                 
                 yard_marker_cmd = [
-                    "python", "scripts/yardMarkerDetection.py",
+                    "python3", "scripts/yardMarkerDetection.py",
                     "--video", self.video_path,
                     "--output", yard_marker_output
                 ]
@@ -254,7 +254,7 @@ class ProcessingWorker(QThread):
 
                 
                 correspondence_cmd = [
-                    "python", "scripts/autoCorrespondancePoints.py",
+                    "python3", "scripts/autoCorrespondancePoints.py",
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
                     "--confidence", "0.7",
@@ -302,7 +302,7 @@ class ProcessingWorker(QThread):
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
                     homography_cmd = [
-                        "python", "scripts/perFrameHomographyTransform.py",
+                        "python3", "scripts/perFrameHomographyTransform.py",
                         "--player-detections", self.detection_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
