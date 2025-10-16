@@ -16,7 +16,6 @@ import sys
 import json
 import time
 from pathlib import Path
-from gpu_utils import detect_gpu, get_optimal_device, get_processing_env_vars, print_gpu_status
 
 class ProcessingWorker(QThread):
     """Worker thread for processing video"""
@@ -335,13 +334,8 @@ class ProcessingWorker(QThread):
         
         try:
             # Start the process with correct working directory and unbuffered output
-            env = get_processing_env_vars()  # Get GPU-optimized environment
+            env = os.environ.copy()
             env['PYTHONUNBUFFERED'] = '1'
-            
-            # Print GPU status for first command
-            if not hasattr(self, '_gpu_status_printed'):
-                print_gpu_status()
-                self._gpu_status_printed = True
 
             self.process = subprocess.Popen(
                 cmd,
