@@ -356,7 +356,8 @@ def process_selected_video(parent):
             return
         
         # Show the modal processing dialog
-        dialog = ProcessingDialog(parent, video_path, parent.current_folder)
+        # Use cache directory outside of app folder (in project root)
+        dialog = ProcessingDialog(parent, video_path, parent.current_folder, cache_dir="cache")
         dialog.exec()
             
     except Exception as e:

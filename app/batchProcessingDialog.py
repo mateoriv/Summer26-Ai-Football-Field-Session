@@ -30,6 +30,14 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
     try:
         video_name = Path(video_path).stem
         
+        # If output_dir is relative, make it relative to project root, not app directory
+        if not os.path.isabs(output_dir):
+            # Get project root (parent of app directory)
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            output_dir = os.path.join(project_root, output_dir)
+        else:
+            output_dir = os.path.abspath(output_dir)
+        
         # Ensure video folder exists in output directory
         os.makedirs(f"{output_dir}/{video_folder}", exist_ok=True)
         os.makedirs(f"{output_dir}/{video_folder}/players", exist_ok=True)
@@ -150,7 +158,13 @@ class BatchProcessingWorker(QThread):
     def __init__(self, video_paths, output_dir="cache", max_workers=2):
         super().__init__()
         self.video_paths = video_paths
-        self.output_dir = output_dir
+        # If output_dir is relative, make it relative to project root, not app directory
+        if not os.path.isabs(output_dir):
+            # Get project root (parent of app directory)
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.output_dir = os.path.join(project_root, output_dir)
+        else:
+            self.output_dir = os.path.abspath(output_dir)
         self.max_workers = max_workers
         self.process = None
         self.is_cancelled = False

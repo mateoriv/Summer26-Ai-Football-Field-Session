@@ -31,7 +31,14 @@ class ProcessingWorker(QThread):
         self.video_path = video_path
         self.video_folder =  os.path.basename(video_folder)
         # Make output directory absolute to avoid working directory issues
-        self.output_dir = os.path.abspath(output_dir)
+        # If output_dir is relative, make it relative to project root, not app directory
+        if not os.path.isabs(output_dir):
+            # Get project root (parent of app directory)
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.output_dir = os.path.join(project_root, output_dir)
+        else:
+            self.output_dir = os.path.abspath(output_dir)
+        print(f"Output directory: {self.output_dir}")
         self.process = None
         self.is_cancelled = False
         self.current_step = 0  # 0: detection, 1: yard markers, 2: homography, 3: rendering
@@ -486,10 +493,11 @@ class ProcessingWorker(QThread):
 class ProcessingDialog(QDialog):
     """Modal dialog for video processing with progress tracking"""
     
-    def __init__(self, parent, video_path, video_folder):
+    def __init__(self, parent, video_path, video_folder, cache_dir="cache"):
         super().__init__(parent)
         self.video_path = video_path
         self.video_folder = video_folder 
+        self.cache_dir = cache_dir
         self.worker = None
         self.current_step = 0
         self.step_names = ["Player Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation"]
@@ -704,7 +712,7 @@ class ProcessingDialog(QDialog):
     
     def start_processing(self):
         """Start the video processing"""
-        self.worker = ProcessingWorker(self.video_path, self.video_folder)
+        self.worker = ProcessingWorker(self.video_path, self.video_folder, self.cache_dir)
         
         # Connect signals
         self.worker.progress_updated.connect(self.update_progress)
