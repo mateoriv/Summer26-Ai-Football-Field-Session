@@ -21,6 +21,29 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import threading
 import multiprocessing
 
+def get_python_executable():
+    """Get the correct Python executable for the current platform"""
+    if sys.platform.startswith('win'):
+        # On Windows, try 'python' first, then 'python3'
+        for cmd in ['python', 'python3']:
+            try:
+                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return cmd
+            except FileNotFoundError:
+                continue
+        return 'python'  # Fallback
+    else:
+        # On Unix-like systems, try 'python3' first, then 'python'
+        for cmd in ['python3', 'python']:
+            try:
+                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return cmd
+            except FileNotFoundError:
+                continue
+        return 'python3'  # Fallback
+
 # Required for ProcessPoolExecutor on Windows
 if __name__ == '__main__':
     multiprocessing.freeze_support()
@@ -49,7 +72,7 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         # Step 1: Player Detection
         detection_output = f"{output_dir}/{video_folder}/players/{video_name}_detection.json"
         detection_cmd = [
-            "python3", "scripts/playerDetection.py", 
+            get_python_executable(), "scripts/playerDetection.py", 
             "--video", video_path, 
             "--output", detection_output
         ]
@@ -60,7 +83,7 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         # Step 2: Yard Marker Detection
         yard_marker_output = f"{output_dir}/{video_folder}/yard_markers/{video_name}_yard_markers.json"
         yard_marker_cmd = [
-            "python3", "scripts/yardMarkerDetection.py",
+            get_python_executable(), "scripts/yardMarkerDetection.py",
             "--video", video_path,
             "--output", yard_marker_output
         ]
@@ -71,7 +94,7 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         # # Step 3: Auto Correspondence Points
         # correspondence_output = f"{output_dir}/{video_folder}/correspondence/{video_name}_correspondence.json"
         # correspondence_cmd = [
-        #     "python3", "scripts/autoCorrespondancePoints.py",
+        #     get_python_executable(), "scripts/autoCorrespondancePoints.py",
         #     "--detection-json", yard_marker_output,
         #     "--output", correspondence_output,
         #     "--confidence", "0.7"
@@ -84,7 +107,7 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         # if os.path.exists(correspondence_output):
         #     homography_output = f"{output_dir}/{video_folder}/{video_name}_homography.json"
         #     homography_cmd = [
-        #         "python3", "scripts/homographyTransform.py",
+        #         get_python_executable(), "scripts/homographyTransform.py",
         #         "--input", detection_output,
         #         "--correspondence", correspondence_output,
         #         "--output", homography_output
@@ -99,7 +122,7 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         # if os.path.exists(homography_output):
         #     field_video_output = f"{output_dir}/{video_folder}/virtual_field/{video_name}_field.mp4"
         #     render_cmd = [
-        #         "python3", "scripts/renderFieldVideo.py",
+        #         get_python_executable(), "scripts/renderFieldVideo.py",
         #         "--input", homography_output,
         #         "--output", field_video_output
         #     ]

@@ -17,6 +17,29 @@ import json
 import time
 from pathlib import Path
 
+def get_python_executable():
+    """Get the correct Python executable for the current platform"""
+    if sys.platform.startswith('win'):
+        # On Windows, try 'python' first, then 'python3'
+        for cmd in ['python', 'python3']:
+            try:
+                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return cmd
+            except FileNotFoundError:
+                continue
+        return 'python'  # Fallback
+    else:
+        # On Unix-like systems, try 'python3' first, then 'python'
+        for cmd in ['python3', 'python']:
+            try:
+                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return cmd
+            except FileNotFoundError:
+                continue
+        return 'python3'  # Fallback
+
 class ProcessingWorker(QThread):
     """Worker thread for processing video"""
     progress_updated = Signal(int, str)  # progress percentage, status message
@@ -171,7 +194,7 @@ class ProcessingWorker(QThread):
                 
                 
                 detection_cmd = [
-                    "python3", "scripts/playerDetection.py", 
+                    get_python_executable(), "scripts/playerDetection.py", 
                     "--video", self.video_path, 
                     "--output", self.detection_output
                 ]
@@ -210,7 +233,7 @@ class ProcessingWorker(QThread):
                 
                 
                 yard_marker_cmd = [
-                    "python3", "scripts/yardMarkerDetection.py",
+                    get_python_executable(), "scripts/yardMarkerDetection.py",
                     "--video", self.video_path,
                     "--output", yard_marker_output
                 ]
@@ -254,7 +277,7 @@ class ProcessingWorker(QThread):
 
                 
                 correspondence_cmd = [
-                    "python3", "scripts/autoCorrespondancePoints.py",
+                    get_python_executable(), "scripts/autoCorrespondancePoints.py",
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
                     "--confidence", "0.7",
@@ -302,7 +325,7 @@ class ProcessingWorker(QThread):
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
                     homography_cmd = [
-                        "python3", "scripts/perFrameHomographyTransform.py",
+                        get_python_executable(), "scripts/perFrameHomographyTransform.py",
                         "--player-detections", self.detection_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
