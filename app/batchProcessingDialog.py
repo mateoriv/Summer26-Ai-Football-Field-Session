@@ -21,6 +21,29 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import threading
 import multiprocessing
 
+def get_python_executable():
+    """Get the correct Python executable for the current platform"""
+    if sys.platform.startswith('win'):
+        # On Windows, try 'python' first, then 'python3'
+        for cmd in ['python', 'python3']:
+            try:
+                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return cmd
+            except FileNotFoundError:
+                continue
+        return 'python'  # Fallback
+    else:
+        # On Unix-like systems, try 'python3' first, then 'python'
+        for cmd in ['python3', 'python']:
+            try:
+                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return cmd
+            except FileNotFoundError:
+                continue
+        return 'python3'  # Fallback
+
 # Required for ProcessPoolExecutor on Windows
 if __name__ == '__main__':
     multiprocessing.freeze_support()
@@ -29,6 +52,14 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
     """Standalone function to process a single video - used with ProcessPoolExecutor"""
     try:
         video_name = Path(video_path).stem
+        
+        # If output_dir is relative, make it relative to project root, not app directory
+        if not os.path.isabs(output_dir):
+            # Get project root (parent of app directory)
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            output_dir = os.path.join(project_root, output_dir)
+        else:
+            output_dir = os.path.abspath(output_dir)
         
         # Ensure video folder exists in output directory
         os.makedirs(f"{output_dir}/{video_folder}", exist_ok=True)
@@ -42,7 +73,7 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         # Step 1: Player Detection
         detection_output = f"{output_dir}/{video_folder}/players/{video_name}_detection.json"
         detection_cmd = [
-            "python", "scripts/playerDetection.py", 
+            get_python_executable(), "scripts/playerDetection.py", 
             "--video", video_path, 
             "--output", detection_output
         ]
@@ -53,7 +84,7 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         # Step 2: Yard Marker Detection
         yard_marker_output = f"{output_dir}/{video_folder}/yard_markers/{video_name}_yard_markers.json"
         yard_marker_cmd = [
-            "python", "scripts/yardMarkerDetection.py",
+            get_python_executable(), "scripts/yardMarkerDetection.py",
             "--video", video_path,
             "--output", yard_marker_output
         ]
@@ -61,39 +92,38 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         if not _run_command_standalone(yard_marker_cmd, "Yard Marker Detection"):
             return False
         
-        # Step 3: Auto Correspondence Points
-        correspondence_output = f"{output_dir}/{video_folder}/correspondence/{video_name}_correspondence.json"
-        correspondence_cmd = [
-            "python", "scripts/autoCorrespondancePoints.py",
-            "--detection-json", yard_marker_output,
-            "--output", correspondence_output,
-            "--confidence", "0.7",
-            "--per-frame"
-        ]
+        # # Step 3: Auto Correspondence Points
+        # correspondence_output = f"{output_dir}/{video_folder}/correspondence/{video_name}_correspondence.json"
+        # correspondence_cmd = [
+        #     get_python_executable(), "scripts/autoCorrespondancePoints.py",
+        #     "--detection-json", yard_marker_output,
+        #     "--output", correspondence_output,
+        #     "--confidence", "0.7"
+        # ]
         
-        if not _run_command_standalone(correspondence_cmd, "Correspondence Points Generation"):
-            return False
+        # if not _run_command_standalone(correspondence_cmd, "Correspondence Points Generation"):
+        #     return False
         
-        # Step 4: Homography Transformation
-        if os.path.exists(correspondence_output):
-            homography_output = f"{output_dir}/{video_folder}/homography/{video_name}_normalized_positions.json"
-            homography_cmd = [
-                        "python", "scripts/perFrameHomographyTransform.py",
-                        "--player-detections", detection_output,
-                        "--correspondence-points", correspondence_output,
-                        "--output", homography_output
-                    ]
+        # # Step 4: Homography Transformation
+        # if os.path.exists(correspondence_output):
+        #     homography_output = f"{output_dir}/{video_folder}/{video_name}_homography.json"
+        #     homography_cmd = [
+        #         get_python_executable(), "scripts/homographyTransform.py",
+        #         "--input", detection_output,
+        #         "--correspondence", correspondence_output,
+        #         "--output", homography_output
+        #     ]
             
-            if not _run_command_standalone(homography_cmd, "Homography Transformation"):
-                return False
-        else:
-            print(f"No correspondence points found for {video_name}, skipping homography transformation")
+        #     if not _run_command_standalone(homography_cmd, "Homography Transformation"):
+        #         return False
+        # else:
+        #     print(f"No correspondence points found for {video_name}, skipping homography transformation")
         
         # # Step 5: Render Field Video
         # if os.path.exists(homography_output):
         #     field_video_output = f"{output_dir}/{video_folder}/virtual_field/{video_name}_field.mp4"
         #     render_cmd = [
-        #         "python3", "scripts/renderFieldVideo.py",
+        #         get_python_executable(), "scripts/renderFieldVideo.py",
         #         "--input", homography_output,
         #         "--output", field_video_output
         #     ]
@@ -153,7 +183,13 @@ class BatchProcessingWorker(QThread):
     def __init__(self, video_paths, output_dir="cache", max_workers=2):
         super().__init__()
         self.video_paths = video_paths
-        self.output_dir = output_dir
+        # If output_dir is relative, make it relative to project root, not app directory
+        if not os.path.isabs(output_dir):
+            # Get project root (parent of app directory)
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.output_dir = os.path.join(project_root, output_dir)
+        else:
+            self.output_dir = os.path.abspath(output_dir)
         self.max_workers = max_workers
         self.process = None
         self.is_cancelled = False

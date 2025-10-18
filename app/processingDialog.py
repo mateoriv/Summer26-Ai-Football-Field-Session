@@ -17,6 +17,29 @@ import json
 import time
 from pathlib import Path
 
+def get_python_executable():
+    """Get the correct Python executable for the current platform"""
+    if sys.platform.startswith('win'):
+        # On Windows, try 'python' first, then 'python3'
+        for cmd in ['python', 'python3']:
+            try:
+                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return cmd
+            except FileNotFoundError:
+                continue
+        return 'python'  # Fallback
+    else:
+        # On Unix-like systems, try 'python3' first, then 'python'
+        for cmd in ['python3', 'python']:
+            try:
+                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return cmd
+            except FileNotFoundError:
+                continue
+        return 'python3'  # Fallback
+
 class ProcessingWorker(QThread):
     """Worker thread for processing video"""
     progress_updated = Signal(int, str)  # progress percentage, status message
@@ -31,7 +54,14 @@ class ProcessingWorker(QThread):
         self.video_path = video_path
         self.video_folder =  os.path.basename(video_folder)
         # Make output directory absolute to avoid working directory issues
-        self.output_dir = os.path.abspath(output_dir)
+        # If output_dir is relative, make it relative to project root, not app directory
+        if not os.path.isabs(output_dir):
+            # Get project root (parent of app directory)
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.output_dir = os.path.join(project_root, output_dir)
+        else:
+            self.output_dir = os.path.abspath(output_dir)
+        print(f"Output directory: {self.output_dir}")
         self.process = None
         self.is_cancelled = False
         self.current_step = 0  # 0: detection, 1: yard markers, 2: homography, 3: rendering
@@ -164,7 +194,7 @@ class ProcessingWorker(QThread):
                 
                 
                 detection_cmd = [
-                    "python", "scripts/playerDetection.py", 
+                    get_python_executable(), "scripts/playerDetection.py", 
                     "--video", self.video_path, 
                     "--output", self.detection_output
                 ]
@@ -203,7 +233,7 @@ class ProcessingWorker(QThread):
                 
                 
                 yard_marker_cmd = [
-                    "python", "scripts/yardMarkerDetection.py",
+                    get_python_executable(), "scripts/yardMarkerDetection.py",
                     "--video", self.video_path,
                     "--output", yard_marker_output
                 ]
@@ -247,7 +277,7 @@ class ProcessingWorker(QThread):
 
                 
                 correspondence_cmd = [
-                    "python", "scripts/autoCorrespondancePoints.py",
+                    get_python_executable(), "scripts/autoCorrespondancePoints.py",
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
                     "--confidence", "0.7",
@@ -295,7 +325,7 @@ class ProcessingWorker(QThread):
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
                     homography_cmd = [
-                        "python", "scripts/perFrameHomographyTransform.py",
+                        get_python_executable(), "scripts/perFrameHomographyTransform.py",
                         "--player-detections", self.detection_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
@@ -482,10 +512,11 @@ class ProcessingWorker(QThread):
 class ProcessingDialog(QDialog):
     """Modal dialog for video processing with progress tracking"""
     
-    def __init__(self, parent, video_path, video_folder):
+    def __init__(self, parent, video_path, video_folder, cache_dir="cache"):
         super().__init__(parent)
         self.video_path = video_path
         self.video_folder = video_folder 
+        self.cache_dir = cache_dir
         self.worker = None
         self.current_step = 0
         self.step_names = ["Player Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation"]
@@ -700,7 +731,7 @@ class ProcessingDialog(QDialog):
     
     def start_processing(self):
         """Start the video processing"""
-        self.worker = ProcessingWorker(self.video_path, self.video_folder)
+        self.worker = ProcessingWorker(self.video_path, self.video_folder, self.cache_dir)
         
         # Connect signals
         self.worker.progress_updated.connect(self.update_progress)
