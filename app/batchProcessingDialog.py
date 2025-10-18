@@ -35,13 +35,14 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         os.makedirs(f"{output_dir}/{video_folder}/players", exist_ok=True)
         os.makedirs(f"{output_dir}/{video_folder}/yard_markers", exist_ok=True)
         os.makedirs(f"{output_dir}/{video_folder}/correspondence", exist_ok=True)
+        os.makedirs(f"{output_dir}/{video_folder}/homography", exist_ok=True)
         os.makedirs(f"{output_dir}/{video_folder}/virtual_field", exist_ok=True)
         os.makedirs(f"{output_dir}/{video_folder}/results", exist_ok=True)
         
         # Step 1: Player Detection
         detection_output = f"{output_dir}/{video_folder}/players/{video_name}_detection.json"
         detection_cmd = [
-            "python3", "scripts/playerDetection.py", 
+            "python", "scripts/playerDetection.py", 
             "--video", video_path, 
             "--output", detection_output
         ]
@@ -52,7 +53,7 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         # Step 2: Yard Marker Detection
         yard_marker_output = f"{output_dir}/{video_folder}/yard_markers/{video_name}_yard_markers.json"
         yard_marker_cmd = [
-            "python3", "scripts/yardMarkerDetection.py",
+            "python", "scripts/yardMarkerDetection.py",
             "--video", video_path,
             "--output", yard_marker_output
         ]
@@ -60,32 +61,33 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         if not _run_command_standalone(yard_marker_cmd, "Yard Marker Detection"):
             return False
         
-        # # Step 3: Auto Correspondence Points
-        # correspondence_output = f"{output_dir}/{video_folder}/correspondence/{video_name}_correspondence.json"
-        # correspondence_cmd = [
-        #     "python3", "scripts/autoCorrespondancePoints.py",
-        #     "--detection-json", yard_marker_output,
-        #     "--output", correspondence_output,
-        #     "--confidence", "0.7"
-        # ]
+        # Step 3: Auto Correspondence Points
+        correspondence_output = f"{output_dir}/{video_folder}/correspondence/{video_name}_correspondence.json"
+        correspondence_cmd = [
+            "python", "scripts/autoCorrespondancePoints.py",
+            "--detection-json", yard_marker_output,
+            "--output", correspondence_output,
+            "--confidence", "0.7",
+            "--per-frame"
+        ]
         
-        # if not _run_command_standalone(correspondence_cmd, "Correspondence Points Generation"):
-        #     return False
+        if not _run_command_standalone(correspondence_cmd, "Correspondence Points Generation"):
+            return False
         
-        # # Step 4: Homography Transformation
-        # if os.path.exists(correspondence_output):
-        #     homography_output = f"{output_dir}/{video_folder}/{video_name}_homography.json"
-        #     homography_cmd = [
-        #         "python3", "scripts/homographyTransform.py",
-        #         "--input", detection_output,
-        #         "--correspondence", correspondence_output,
-        #         "--output", homography_output
-        #     ]
+        # Step 4: Homography Transformation
+        if os.path.exists(correspondence_output):
+            homography_output = f"{output_dir}/{video_folder}/homography/{video_name}_normalized_positions.json"
+            homography_cmd = [
+                        "python", "scripts/perFrameHomographyTransform.py",
+                        "--player-detections", detection_output,
+                        "--correspondence-points", correspondence_output,
+                        "--output", homography_output
+                    ]
             
-        #     if not _run_command_standalone(homography_cmd, "Homography Transformation"):
-        #         return False
-        # else:
-        #     print(f"No correspondence points found for {video_name}, skipping homography transformation")
+            if not _run_command_standalone(homography_cmd, "Homography Transformation"):
+                return False
+        else:
+            print(f"No correspondence points found for {video_name}, skipping homography transformation")
         
         # # Step 5: Render Field Video
         # if os.path.exists(homography_output):
@@ -146,6 +148,7 @@ class BatchProcessingWorker(QThread):
     video_completed = Signal(str, bool)  # video name, success status
     batch_completed = Signal(dict)  # results
     batch_failed = Signal(str)  # error message
+    batch_cancelled = Signal()  # batch processing cancelled
     
     def __init__(self, video_paths, output_dir="cache", max_workers=2):
         super().__init__()
@@ -160,6 +163,17 @@ class BatchProcessingWorker(QThread):
         self.failed_videos = 0
         self.results = []
         self.lock = threading.Lock()
+        
+    def cancel(self):
+        """Cancel the batch processing"""
+        if not self.is_cancelled:
+            self.is_cancelled = True
+            self.output_received.emit("Cancelling batch processing...")
+            print("Batch processing worker cancelled")
+    
+    def is_cancelled_check(self):
+        """Check if processing should be cancelled"""
+        return self.is_cancelled
         
     def run(self):
         """Run batch processing for all videos with parallel processing"""
@@ -177,6 +191,7 @@ class BatchProcessingWorker(QThread):
                 future_to_video = {}
                 for i, video_path in enumerate(self.video_paths):
                     if self.is_cancelled:
+                        self.output_received.emit("Processing cancelled before starting")
                         return
                     
                     video_name = Path(video_path).stem
@@ -189,22 +204,31 @@ class BatchProcessingWorker(QThread):
                 # Process completed tasks as they finish
                 for future in as_completed(future_to_video):
                     if self.is_cancelled:
+                        # Cancel remaining futures
+                        self.output_received.emit("Cancelling remaining tasks...")
+                        for remaining_future in future_to_video:
+                            if not remaining_future.done():
+                                remaining_future.cancel()
+                        self.output_received.emit("Batch processing cancelled")
+                        self.batch_cancelled.emit()
                         return
                     
                     i, video_path, video_name = future_to_video[future]
                     
                     try:
-                        success = future.result()
+                        # Add timeout to prevent hanging
+                        success = future.result(timeout=300)  # 5 minute timeout per video
+                        
                         
                         with self.lock:
                             if success:
                                 self.completed_videos += 1
                                 self.video_completed.emit(video_name, True)
-                                self.output_received.emit(f"✓ {video_name} completed successfully")
+                                self.output_received.emit(f"[OK] {video_name} completed successfully")
                             else:
                                 self.failed_videos += 1
                                 self.video_completed.emit(video_name, False)
-                                self.output_received.emit(f"✗ {video_name} failed")
+                                self.output_received.emit(f"[FAIL] {video_name} failed")
                             
                             # Add to results
                             self.results.append({
@@ -511,7 +535,7 @@ class BatchProcessingDialog(QDialog):
             return
         
         # Get the number of parallel workers from the spinbox
-        max_workers = 100
+        max_workers = 15
         
         self.worker = BatchProcessingWorker(self.video_paths, max_workers=max_workers)
         
@@ -521,6 +545,7 @@ class BatchProcessingDialog(QDialog):
         self.worker.video_completed.connect(self.video_completed)
         self.worker.batch_completed.connect(self.batch_completed)
         self.worker.batch_failed.connect(self.batch_failed)
+        self.worker.batch_cancelled.connect(self.batch_cancelled)
         
         # Update UI
         self.start_button.setEnabled(False)
@@ -571,22 +596,37 @@ class BatchProcessingDialog(QDialog):
         self.start_button.setVisible(False)
         self.close_button.setVisible(True)
     
-    def cancel_processing(self):
-        """Cancel batch processing"""
-        if self.worker:
-            self.worker.cancel()
-            self.worker.wait()
-        
+    def batch_cancelled(self):
+        """Handle batch processing cancellation"""
         self.status_label.setText("Batch processing cancelled")
-        self.add_output("\nBatch processing cancelled by user")
+        self.add_output(f"\nBatch processing cancelled by user")
         
         # Show close button and hide other buttons
         self.cancel_button.setVisible(False)
         self.start_button.setVisible(False)
         self.close_button.setVisible(True)
     
+    def cancel_processing(self):
+        """Cancel batch processing"""
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel()
+            # Don't wait here - let the worker handle the cancellation
+            # The batch_cancelled signal will handle the UI updates
+        else:
+            # If no worker or worker not running, just update UI
+            self.status_label.setText("Batch processing cancelled")
+            self.add_output("\nBatch processing cancelled by user")
+            
+            # Show close button and hide other buttons
+            self.cancel_button.setVisible(False)
+            self.start_button.setVisible(False)
+            self.close_button.setVisible(True)
+    
     def closeEvent(self, event):
         """Handle dialog close event"""
         if self.worker and self.worker.isRunning():
             self.cancel_processing()
+            # Give the worker a moment to cancel gracefully
+            if not self.worker.wait(3000):  # 3 second timeout
+                self.worker.terminate()  # Force terminate if needed
         event.accept()
