@@ -407,21 +407,17 @@ class ProcessingWorker(QThread):
                     last_update_time = elapsed_time
     
                     # Calculate progress based on phase
-                    progress = 0  # Initialize progress variable
-                    
                     if self.bootup_start_time is not None:
                         # Frame processing phase: 25% to 100% based on actual frames
                         if self.total_frames > 0 and self.current_frame > 0:
                             frame_progress = self.current_frame / self.total_frames
                             # 25% + (75% * frame_progress) = 25% to 100%
                             progress = (0.25 + 0.75 * frame_progress) * 100
-                        else:
-                            # Still in bootup phase even after bootup_start_time is set
-                            progress = 25
+                            
                     else:
-                        # Bootup phase: 0% to 25% over 30 seconds
+                        # Bootup phase: 0% to 25% over 10 seconds
                         bootup_progress = min(1, elapsed_time / 30.0)
-                        progress = bootup_progress * 25
+                        progress =  bootup_progress * 25
                         
                         # if elapsed_time > 10:  # Show bootup progress after 2 seconds
                         #     self.output_received.emit(f"Initializing {step_name}... ({bootup_progress*100:.1f}%)")
