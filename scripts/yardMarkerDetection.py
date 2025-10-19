@@ -22,11 +22,11 @@ import numpy as np
 YARD_MARKER_CLASSES = {
     0: 'f5', 1: 'fl1', 2: 'fl2', 3: 'fl3', 4: 'fl4',
     5: 'fr1', 6: 'fr2', 7: 'fr3', 8: 'fr4', 9: 'n5',
-    10: 'nl1', 11: 'nl2', 12: 'nl3', 13: 'nl4', 14: 'nl5',
-    15: 'nr1', 16: 'nr2', 17: 'nr3', 18: 'nr4'
+    10: 'nl1', 11: 'nl2', 12: 'nl3', 13: 'nl4',
+    14: 'nr1', 15: 'nr2', 16: 'nr3', 17: 'nr4'
 }
 
-def yardMarkerDetection(video_path, model_path="yolo_models/bestYardMarkerAccurate.pt", confidence_threshold=0.5):
+def yardMarkerDetection(video_path, model_path="yolo_models/yardMarker2.pt", confidence_threshold=0.5):
     """
     Detect yard markers in video frames using a trained YOLO model
     
@@ -203,7 +203,7 @@ def main():
     parser.add_argument('--video', type=str, required=True, help='Path to input video file')
     parser.add_argument('--output', type=str, default='cache/yardMarkerDetection.json', 
                        help='Path to output JSON file')
-    parser.add_argument('--model', type=str, default='yolo_models/bestYardMarkerAccurate.pt',
+    parser.add_argument('--model', type=str, default='yolo_models/yardMarker2.pt',
                        help='Path to YOLO model file')
     parser.add_argument('--confidence', type=float, default=0.5,
                        help='Confidence threshold for detections')
