@@ -10,6 +10,84 @@ import cv2
 import numpy as np
 
 
+class SnapMarkerSlider(QWidget):
+    """Custom slider widget that displays snap markers on the timeline"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.slider = QSlider(Qt.Horizontal, self)
+        self.snap_frames = []  # List of snap frame numbers
+        self.total_frames = 0
+        
+        # Layout
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.slider)
+        self.setLayout(layout)
+        
+        # Set up slider style
+        self.slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #555555;
+                height: 6px;
+                background: #404040;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #606060;
+                border: 1px solid #555555;
+                width: 16px;
+                margin: -6px 0;
+                border-radius: 8px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #707070;
+            }
+            QSlider::handle:horizontal:pressed {
+                background: #808080;
+            }
+            QSlider::sub-page:horizontal {
+                background: #606060;
+                border-radius: 3px;
+            }
+        """)
+    
+    def set_snap_frames(self, snap_frames, total_frames):
+        """Set snap frames to display"""
+        self.snap_frames = snap_frames
+        self.total_frames = total_frames
+        self.update()
+    
+    def paintEvent(self, event):
+        """Override paint event to draw snap markers"""
+        super().paintEvent(event)
+        
+        if not self.snap_frames or self.total_frames == 0:
+            return
+        
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Get slider geometry
+        slider_rect = self.slider.geometry()
+        slider_width = slider_rect.width()
+        slider_height = slider_rect.height()
+        slider_y = slider_rect.y()
+        slider_x = slider_rect.x()
+        
+        # Draw snap markers as white dashes (vertical lines extending above and below slider)
+        dash_height = 8  # Height of dash above/below slider
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        for snap_frame in self.snap_frames:
+            # Calculate x position based on frame number
+            x = slider_x + int((snap_frame / self.total_frames) * slider_width)
+            # Draw vertical dash extending above and below the slider
+            # Top dash (above slider)
+            painter.drawLine(x, slider_y - dash_height, x, slider_y)
+            # Bottom dash (below slider)
+            painter.drawLine(x, slider_y + slider_height, x, slider_y + slider_height + dash_height)
+
+
 class CustomVideoWidget(QWidget):
     """
     Custom video widget that uses OpenCV to display frames and QPainter
@@ -90,7 +168,7 @@ class CustomVideoWidget(QWidget):
         # Update progress slider
         if hasattr(parent, 'progress_slider') and hasattr(parent, 'custom_video_total_frames'):
             progress = int((self.current_frame / parent.custom_video_total_frames) * 100)
-            parent.progress_slider.setValue(progress)
+            parent.progress_slider.slider.setValue(progress)
         
         # Update time label
         if hasattr(parent, 'time_label'):
@@ -237,7 +315,10 @@ class CustomVideoWidget(QWidget):
             self.timer.stop()
             self.is_playing = False
         else:
-            self.timer.start(33)  # ~30 FPS
+            # Calculate timer interval based on actual video FPS
+            fps = self.fps if self.fps > 0 else 30.0
+            interval_ms = int(1000.0 / fps)  # Convert FPS to milliseconds
+            self.timer.start(interval_ms)
             self.is_playing = True
     
     def load_video(self, video_path):
@@ -768,37 +849,12 @@ def create_video_dock(parent):
     """)
     controls_layout.addWidget(parent.time_label)
 
-    # Progress slider
-    parent.progress_slider = QSlider(Qt.Horizontal)
-    parent.progress_slider.setRange(0, 0)
-    parent.progress_slider.setStyleSheet("""
-        QSlider::groove:horizontal {
-            border: 1px solid #555555;
-            height: 6px;
-            background: #404040;
-            border-radius: 3px;
-        }
-        QSlider::handle:horizontal {
-            background: #606060;
-            border: 1px solid #555555;
-            width: 16px;
-            margin: -6px 0;
-            border-radius: 8px;
-        }
-        QSlider::handle:horizontal:hover {
-            background: #707070;
-        }
-        QSlider::handle:horizontal:pressed {
-            background: #808080;
-        }
-        QSlider::sub-page:horizontal {
-            background: #606060;
-            border-radius: 3px;
-        }
-    """)
-    parent.progress_slider.sliderMoved.connect(lambda position: seek_custom_video(parent, position))
-    parent.progress_slider.sliderPressed.connect(lambda: pause_custom_video_for_drag(parent))
-    parent.progress_slider.sliderReleased.connect(lambda: resume_custom_video_after_drag(parent))
+    # Progress slider with snap markers
+    parent.progress_slider = SnapMarkerSlider(parent)
+    parent.progress_slider.slider.setRange(0, 0)
+    parent.progress_slider.slider.sliderMoved.connect(lambda position: seek_custom_video(parent, position))
+    parent.progress_slider.slider.sliderPressed.connect(lambda: pause_custom_video_for_drag(parent))
+    parent.progress_slider.slider.sliderReleased.connect(lambda: resume_custom_video_after_drag(parent))
     controls_layout.addWidget(parent.progress_slider, 1)
 
     # Volume label
@@ -906,7 +962,10 @@ def resume_custom_video_after_drag(parent):
     """Resume custom video after dragging slider"""
     if hasattr(parent, 'custom_video') and hasattr(parent, 'was_playing_before_drag') and parent.was_playing_before_drag:
         custom_video = parent.custom_video
-        custom_video.timer.start(33)
+        # Calculate timer interval based on actual video FPS
+        fps = custom_video.fps if custom_video.fps > 0 else 30.0
+        interval_ms = int(1000.0 / fps)  # Convert FPS to milliseconds
+        custom_video.timer.start(interval_ms)
         custom_video.is_playing = True
     parent.was_playing_before_drag = False
 
@@ -915,7 +974,10 @@ def load_video_for_custom_widget(parent, video_path):
     if hasattr(parent, 'custom_video'):
         custom_video = parent.custom_video
         if custom_video.load_video(video_path):
-            parent.progress_slider.setRange(0, 100)
+            parent.progress_slider.slider.setRange(0, 100)
+            
+            # Load snap detection data if available
+            load_snap_detection_data(parent, video_path)
             parent.custom_video_total_frames = custom_video.total_frames
             
             total_time = custom_video.total_frames / custom_video.fps
@@ -928,6 +990,35 @@ def load_video_for_custom_widget(parent, video_path):
             return False
     return False
 
+def load_snap_detection_data(parent, video_path):
+    """Load snap detection data and display markers on timeline"""
+    if not hasattr(parent, 'current_folder') or not hasattr(parent, 'progress_slider'):
+        return
+    
+    try:
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        current_folder_name = os.path.basename(parent.current_folder)
+        snap_file = os.path.join(project_root, "cache", current_folder_name, f"{video_name}_snap_detection.json")
+        
+        if os.path.exists(snap_file):
+            with open(snap_file, 'r') as f:
+                snap_data = json.load(f)
+            
+            snaps = snap_data.get('snaps', [])
+            snap_frames = [snap['frame'] for snap in snaps]
+            
+            # Get total frames from video
+            if hasattr(parent, 'custom_video_total_frames'):
+                total_frames = parent.custom_video_total_frames
+                parent.progress_slider.set_snap_frames(snap_frames, total_frames)
+                print(f"Loaded {len(snap_frames)} snap markers")
+        else:
+            # Clear snap markers if file doesn't exist
+            parent.progress_slider.set_snap_frames([], 0)
+    except Exception as e:
+        print(f"Error loading snap detection data: {e}")
+
 def set_current_video_path(parent, video_path):
     """Set the current video path for bounding box data loading"""
     parent.current_video_path = video_path
@@ -938,6 +1029,9 @@ def set_current_video_path(parent, video_path):
     # The visibility is controlled by the toggle buttons, but data is always loaded
     load_and_set_detection_data(parent, "players")
     load_and_set_detection_data(parent, "yard_markers")
+    
+    # Load snap detection data for timeline markers
+    load_snap_detection_data(parent, video_path)
     
     # Load homography data for virtual field
     if hasattr(parent, 'current_folder') and hasattr(parent, 'virtual_field'):

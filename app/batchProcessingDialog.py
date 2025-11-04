@@ -81,7 +81,18 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
         if not _run_command_standalone(detection_cmd, "Player Detection"):
             return False
         
-        # Step 2: Yard Marker Detection
+        # Step 2: Snap Detection
+        snap_output = f"{output_dir}/{video_folder}/{video_name}_snap_detection.json"
+        snap_cmd = [
+            get_python_executable(), "scripts/snapDetection.py",
+            "--player-detections", detection_output,
+            "--output", snap_output
+        ]
+        
+        if not _run_command_standalone(snap_cmd, "Snap Detection"):
+            return False
+        
+        # Step 3: Yard Marker Detection
         yard_marker_output = f"{output_dir}/{video_folder}/yard_markers/{video_name}_yard_markers.json"
         yard_marker_cmd = [
             get_python_executable(), "scripts/yardMarkerDetection.py",
