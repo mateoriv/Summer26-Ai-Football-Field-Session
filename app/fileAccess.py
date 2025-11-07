@@ -255,11 +255,10 @@ def create_video_based_csv(output_dir, video_files, folder_name=None):
         # Create default data structure with video names as the first column
         default_data = {
             'CLIP NAME': video_names,
-            'HASH': 0,
+            'HASH': "",
             'YARD LINE': 0,
-            'DIST': 0,
             'PERSONNEL' : 0,
-            'Backfield' : "",
+            'BACKFIELD' : "",
             'FIB/FSL' : "",
             'OFF FORM' : "",
             'FORM VARIATION': "",
