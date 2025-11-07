@@ -38,7 +38,7 @@ def yardMarkerDetection(video_path, model_path="yolo_models/TRYTHISONE.pt", conf
     Returns:
         Dictionary with detection results
     """
-    print(f"🎯 Starting yard marker detection for: {video_path}")
+    print(f"[INFO] Starting yard marker detection for: {video_path}")
     
     # Check if video file exists
     if not os.path.exists(video_path):
@@ -49,10 +49,10 @@ def yardMarkerDetection(video_path, model_path="yolo_models/TRYTHISONE.pt", conf
         raise FileNotFoundError(f"Model file not found: {model_path}")
     
     # Load YOLO model
-    print(f"📦 Loading YOLO model: {model_path}")
+    print(f"[INFO] Loading YOLO model: {model_path}")
     try:
         model = YOLO(model_path)
-        print("✅ Model loaded successfully")
+        print("[SUCCESS] Model loaded successfully")
     except Exception as e:
         raise RuntimeError(f"Failed to load YOLO model: {e}")
     
@@ -67,7 +67,7 @@ def yardMarkerDetection(video_path, model_path="yolo_models/TRYTHISONE.pt", conf
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    print(f"📹 Video info: {total_frames} frames, {fps} FPS, {width}x{height}")
+    print(f"[INFO] Video info: {total_frames} frames, {fps} FPS, {width}x{height}")
     
     # Initialize results
     results = {
@@ -89,7 +89,7 @@ def yardMarkerDetection(video_path, model_path="yolo_models/TRYTHISONE.pt", conf
     frame_number = 0
     detections_count = 0
     
-    print("🔍 Processing frames...")
+    print("[INFO] Processing frames...")
     
     while True:
         ret, frame = cap.read()
@@ -156,7 +156,7 @@ def yardMarkerDetection(video_path, model_path="yolo_models/TRYTHISONE.pt", conf
             frame_number += 1
             
         except Exception as e:
-            print(f"⚠️ Error processing frame {frame_number}: {e}")
+            print(f"[WARNING] Error processing frame {frame_number}: {e}")
             # Add empty frame result
             frame_result = {
                 "frame_number": frame_number,
@@ -178,9 +178,9 @@ def yardMarkerDetection(video_path, model_path="yolo_models/TRYTHISONE.pt", conf
         "average_detections_per_frame": detections_count / frame_number if frame_number > 0 else 0
     }
     
-    print(f"✅ Yard marker detection completed!")
-    print(f"📊 Summary: {detections_count} total detections across {frame_number} frames")
-    print(f"📊 Frames with detections: {results['summary']['frames_with_detections']}")
+    print(f"[SUCCESS] Yard marker detection completed!")
+    print(f"[INFO] Summary: {detections_count} total detections across {frame_number} frames")
+    print(f"[INFO] Frames with detections: {results['summary']['frames_with_detections']}")
     
     return results
 
@@ -193,7 +193,7 @@ def save_results(results, output_path):
     with open(output_path, 'w') as f:
         json.dump(results, f, indent=2)
     
-    print(f"💾 Results saved to: {output_path}")
+    print(f"[SUCCESS] Results saved to: {output_path}")
 
 def main():
     """Main function for standalone execution"""
@@ -221,10 +221,10 @@ def main():
         # Save results
         save_results(results, args.output)
         
-        print("🎉 Yard marker detection completed successfully!")
+        print("[SUCCESS] Yard marker detection completed successfully!")
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

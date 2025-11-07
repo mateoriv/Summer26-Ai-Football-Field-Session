@@ -65,7 +65,7 @@ class ProcessingWorker(QThread):
         print(f"Output directory: {self.output_dir}")
         self.process = None
         self.is_cancelled = False
-        self.current_step = 0  # 0: detection, 1: snap detection, 2: yard markers, 3: homography, 4: rendering
+        self.current_step = 0  # 0: detection, 1: snap detection, 2: yard markers, 3: correspondence, 4: homography, 5: static process
         self.video_name = None
         self.detection_output = None
         self.homography_output = None
@@ -100,6 +100,11 @@ class ProcessingWorker(QThread):
         elif step_index == 4:  # Homography Transformation
             homography_file = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
             return os.path.exists(homography_file)
+        elif step_index == 5:  # Static Process
+            # Static process doesn't create a file, so we check if homography exists (prerequisite)
+            homography_file = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
+            snap_file = f"{self.output_dir}/{self.video_folder}/{self.video_name}_snap_detection.json"
+            return os.path.exists(homography_file) and os.path.exists(snap_file)
         return False
     
     def ask_user_skip_step(self, step_name, step_index):
@@ -169,7 +174,7 @@ class ProcessingWorker(QThread):
 
                 
             self.detection_output = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
-            self.snap_output = f"{self.output_dir}/{self.video_folder}/{self.video_name}_snap_detection.json"
+            self.snap_output = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
             yard_marker_output = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
             correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
             self.homography_output = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
@@ -389,6 +394,69 @@ class ProcessingWorker(QThread):
                     self.output_received.emit("No correspondence points found, skipping homography transformation")
                     self.step_completed.emit("Homography Transformation", False)
                     
+            elif self.current_step == 5:
+                # Step 6: Static Process
+                step_name = "Static Process"
+                self.output_received.emit(f"Step 6: Checking {step_name}...")
+                
+                # Check prerequisites
+                snap_file = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
+                homography_file = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
+                
+                if not os.path.exists(snap_file):
+                    self.output_received.emit("ERROR: Snap detection file not found. Cannot run static process.")
+                    self.step_completed.emit(step_name, False)
+                    return
+                
+                if not os.path.exists(homography_file):
+                    self.output_received.emit("ERROR: Homography file not found. Cannot run static process.")
+                    self.step_completed.emit(step_name, False)
+                    return
+                
+                # Check if step is already completed (optional - static process can be re-run)
+                if self.check_step_completed(5):
+                    self.output_received.emit(f"✓ {step_name} prerequisites met!")
+                    user_choice = self.ask_user_skip_step(step_name, 5)
+                    
+                    if user_choice == "cancel":
+                        self.processing_failed.emit("Processing cancelled by user")
+                        return
+                    elif user_choice == "skip":
+                        self.output_received.emit(f"Skipping {step_name}")
+                        self.step_completed.emit(step_name, True)
+                        return
+                    else:  # rerun
+                        self.output_received.emit(f"Re-running {step_name}...")
+                
+                self.progress_updated.emit(0, "Step 6: Loading snap detection data...")
+                self.output_received.emit("Step 6: Running static process...")
+                
+                # Load snap detection to get snap frame number
+                try:
+                    
+                    # Run static process
+                    static_process_cmd = [
+                        get_python_executable(), "CNN/staticProcess.py",
+                        "--video-name", self.video_name,
+                        "--folder-name", self.video_folder,
+                        "--cache-dir", "cache"
+                    ]
+                    
+                    if self.is_cancelled:
+                        return
+                    
+                    result = self._run_command(static_process_cmd, step_name, 0, 100)
+                    if result:
+                        self.step_completed.emit(step_name, True)
+                    else:
+                        self.step_completed.emit(step_name, False)
+                        
+                except Exception as e:
+                    self.output_received.emit(f"ERROR: Failed to run static process: {str(e)}")
+                    import traceback
+                    self.output_received.emit(traceback.format_exc())
+                    self.step_completed.emit(step_name, False)
+                    
             
         except Exception as e:
             error_msg = f"Error during processing: {str(e)}"
@@ -413,7 +481,7 @@ class ProcessingWorker(QThread):
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
@@ -425,27 +493,28 @@ class ProcessingWorker(QThread):
             line_count = 0
             start_time = time.time()
             last_update_time = 0
+            
+            # Cross-platform non-blocking output reading using threading
+            import threading
+            import queue
+            
+            # Create queues for output lines (separate for stdout and stderr)
+            self.output_queue = queue.Queue()
+            self.error_queue = queue.Queue()
+            self.output_thread = None
+            self.error_thread = None
+            
+            # Start output reading threads
+            self.output_thread = threading.Thread(target=self._read_output_thread, args=(self.process.stdout, self.output_queue), daemon=True)
+            self.error_thread = threading.Thread(target=self._read_output_thread, args=(self.process.stderr, self.error_queue), daemon=True)
+            self.output_thread.start()
+            self.error_thread.start()
 
             while self.process.poll() is None:  # Process is still running
                 if self.is_cancelled:
                     self.process.terminate()
                     return False
     
-                # Cross-platform non-blocking output reading using threading
-                import threading
-                import queue
-                
-                # Create a queue for output lines
-                if not hasattr(self, 'output_queue'):
-                    self.output_queue = queue.Queue()
-                    self.output_thread = None
-                
-                # Start output reading thread if not already started
-                if self.output_thread is None or not self.output_thread.is_alive():
-                    self.output_queue = queue.Queue()
-                    self.output_thread = threading.Thread(target=self._read_output_thread, daemon=True)
-                    self.output_thread.start()
-                
                 # Process any available output from the queue (one line per iteration)
                 try:
                     line = self.output_queue.get_nowait()
@@ -470,6 +539,17 @@ class ProcessingWorker(QThread):
                     # No output available, continue
                     pass
                 
+                # Process any error output from stderr
+                try:
+                    error_line = self.error_queue.get_nowait()
+                    error_line = error_line.strip()
+                    if error_line:
+                        # Emit error lines with ERROR prefix to make them visible
+                        self.output_received.emit(f"ERROR: {error_line}")
+                        print(f"ERROR: {error_line}")
+                except queue.Empty:
+                    # No error output available, continue
+                    pass
                 
                 # Update frame tracking
                 self.frames_processed = self.current_frame
@@ -500,20 +580,72 @@ class ProcessingWorker(QThread):
             # Wait for process to complete
             return_code = self.process.wait()
             
+            # Wait for output threads to finish and read any remaining output
+            if self.output_thread and self.output_thread.is_alive():
+                self.output_thread.join(timeout=2.0)
+            if self.error_thread and self.error_thread.is_alive():
+                self.error_thread.join(timeout=2.0)
+            
+            # Read any remaining output from queues
+            remaining_output = []
+            while True:
+                try:
+                    line = self.output_queue.get_nowait()
+                    if line.strip():
+                        remaining_output.append(line.strip())
+                except queue.Empty:
+                    break
+            
+            # Read any remaining error output from stderr
+            remaining_errors = []
+            while True:
+                try:
+                    error_line = self.error_queue.get_nowait()
+                    if error_line.strip():
+                        remaining_errors.append(error_line.strip())
+                except queue.Empty:
+                    break
+            
+            # Emit remaining output
+            for line in remaining_output:
+                self.output_received.emit(line)
+            
+            # Emit remaining errors with ERROR prefix
+            for error_line in remaining_errors:
+                self.output_received.emit(f"ERROR: {error_line}")
+            
             if return_code == 0:
                 self.progress_updated.emit(progress_end, f"{step_name} completed successfully")
                 self.output_received.emit(f"{step_name} completed successfully")
                 return True
             else:
-                self.output_received.emit(f"{step_name} failed with return code {return_code}")
+                self.output_received.emit("")
+                self.output_received.emit("=" * 60)
+                self.output_received.emit(f"ERROR: {step_name} failed with return code {return_code}")
                 self.output_received.emit(f"Command: {' '.join(cmd)}")
                 self.output_received.emit(f"Working directory: {project_root}")
+                if remaining_errors:
+                    self.output_received.emit("")
+                    self.output_received.emit("Error output:")
+                    for error_line in remaining_errors:
+                        self.output_received.emit(f"  {error_line}")
+                self.output_received.emit("=" * 60)
                 return False
                 
         except Exception as e:
-            self.output_received.emit(f"Error running {step_name}: {str(e)}")
+            import traceback
+            error_traceback = traceback.format_exc()
+            self.output_received.emit("")
+            self.output_received.emit("=" * 60)
+            self.output_received.emit(f"ERROR: Exception occurred while running {step_name}")
+            self.output_received.emit(f"Exception: {str(e)}")
             self.output_received.emit(f"Command: {' '.join(cmd)}")
             self.output_received.emit(f"Working directory: {project_root}")
+            self.output_received.emit("")
+            self.output_received.emit("Traceback:")
+            for line in error_traceback.splitlines():
+                self.output_received.emit(f"  {line}")
+            self.output_received.emit("=" * 60)
             return False
     
     def next_step(self):
@@ -523,7 +655,7 @@ class ProcessingWorker(QThread):
         self.current_frame = 0
         self.frames_processed = 0
         self.bootup_start_time = None
-        if self.current_step <= 4:  # 5 steps: 0, 1, 2, 3, 4
+        if self.current_step <= 5:  # 6 steps: 0, 1, 2, 3, 4, 5
             self.start()
     
     def get_progress_info(self):
@@ -533,17 +665,28 @@ class ProcessingWorker(QThread):
             return f"Frame {self.frames_processed}/{self.total_frames} ({progress_percent:.1f}%)"
         return "Processing..."
     
-    def _read_output_thread(self):
-        """Background thread to read subprocess output"""
+    def _read_output_thread(self, stream, output_queue):
+        """Background thread to read subprocess output from a stream"""
         try:
-            while self.process and self.process.poll() is None:
-                line = self.process.stdout.readline()
+            while self.process and (self.process.poll() is None or stream):
+                line = stream.readline()
                 if line:
-                    self.output_queue.put(line)
+                    output_queue.put(line)
+                elif self.process.poll() is not None:
+                    # Process has finished, try to read any remaining data
+                    remaining = stream.read()
+                    if remaining:
+                        for line in remaining.splitlines(keepends=True):
+                            output_queue.put(line)
+                    break
                 else:
                     time.sleep(0.01)
-        except:
-            pass
+        except Exception as e:
+            # If there's an error reading, try to put it in the queue
+            try:
+                output_queue.put(f"Error reading output: {str(e)}\n")
+            except:
+                pass
     
     def cancel(self):
         """Cancel the processing"""
@@ -562,7 +705,7 @@ class ProcessingDialog(QDialog):
         self.cache_dir = cache_dir
         self.worker = None
         self.current_step = 0
-        self.step_names = ["Player Detection", "Snap Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation"]
+        self.step_names = ["Player Detection", "Snap Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation", "Static Process"]
         self.progress_timer = QTimer()
     
         self.setup_ui()

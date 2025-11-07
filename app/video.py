@@ -975,6 +975,7 @@ def load_video_for_custom_widget(parent, video_path):
         custom_video = parent.custom_video
         if custom_video.load_video(video_path):
             parent.progress_slider.slider.setRange(0, 100)
+            parent.progress_slider.slider.setValue(0)  # Reset slider to zero when switching videos
             
             # Load snap detection data if available
             load_snap_detection_data(parent, video_path)
@@ -999,7 +1000,7 @@ def load_snap_detection_data(parent, video_path):
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         current_folder_name = os.path.basename(parent.current_folder)
-        snap_file = os.path.join(project_root, "cache", current_folder_name, f"{video_name}_snap_detection.json")
+        snap_file = os.path.join(project_root, "cache", current_folder_name, "snap_detection", f"{video_name}_snap_detection.json")
         
         if os.path.exists(snap_file):
             with open(snap_file, 'r') as f:

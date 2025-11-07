@@ -131,7 +131,7 @@ def detect_snaps(velocities, fps,
         grad_all = np.abs(np.gradient(smoothed))
         gradient_threshold = np.percentile(grad_all, 75)
 
-    print(f"📊 Adaptive thresholds: calm={calm_threshold:.2f}, motion={motion_threshold:.2f}, gradient={gradient_threshold:.2f}")
+    print(f"[INFO] Adaptive thresholds: calm={calm_threshold:.2f}, motion={motion_threshold:.2f}, gradient={gradient_threshold:.2f}")
 
     snap_frames = []
     total_frames = len(smoothed)
@@ -230,26 +230,26 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"📂 Loading player detections from: {args.player_detections}")
+    print(f"[INFO] Loading player detections from: {args.player_detections}")
     detections = load_player_detections(args.player_detections)
 
-    print("⚡ Computing motion-compensated velocities...")
+    print("[INFO] Computing motion-compensated velocities...")
     velocities, fps = compute_velocity(detections)
 
     if len(velocities) == 0:
-        print("❌ No detections found — cannot compute snap.")
+        print("[ERROR] No detections found — cannot compute snap.")
         sys.exit(1)
 
-    print(f"📊 Velocity stats: mean={np.mean(velocities):.2f}, max={np.max(velocities):.2f}")
+    print(f"[INFO] Velocity stats: mean={np.mean(velocities):.2f}, max={np.max(velocities):.2f}")
 
-    print("🎯 Detecting snap frames...")
+    print("[INFO] Detecting snap frames...")
     snap_frames = detect_snaps(
         velocities, fps,
         calm_threshold=args.calm_threshold,
         motion_threshold=args.motion_threshold
     )
 
-    print(f"✅ Found {len(snap_frames)} snap(s):")
+    print(f"[SUCCESS] Found {len(snap_frames)} snap(s):")
     for i, snap in enumerate(snap_frames, 1):
         print(f"   {i}. Frame {snap['frame']} ({snap['time']:.2f}s)")
 
@@ -267,8 +267,8 @@ def main():
     with open(args.output, 'w') as f:
         json.dump(output_data, f, indent=2)
 
-    print(f"💾 Results saved to {args.output}")
-    print("🎉 Snap detection completed successfully!")
+    print(f"[SUCCESS] Results saved to {args.output}")
+    print("[SUCCESS] Snap detection completed successfully!")
 
 if __name__ == "__main__":
     main()

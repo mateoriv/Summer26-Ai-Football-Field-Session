@@ -199,7 +199,7 @@ def play_video_clip(parent, video_path, timestamp=None):
             # Update progress slider
             if hasattr(parent, 'custom_video_total_frames'):
                 progress = int((frame_number / parent.custom_video_total_frames) * 100)
-                parent.progress_slider.setValue(progress)
+                parent.progress_slider.slider.setValue(progress)
                 
         except (ValueError, TypeError):
             frame_number = 0

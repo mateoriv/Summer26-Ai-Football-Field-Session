@@ -166,33 +166,59 @@ def load_folder(parent, folder_path, change_view=False):
         # Make the tree view visible when a folder is loaded
         parent.tree_view.setVisible(True)
     
-    # Auto-load first CSV and first video in the folder
-    auto_load_folder_content(parent, folder_path)
+    # Only auto-load if the folder actually contains video files
+    # This prevents loading parent directories that don't have videos
+    if has_mp4(folder_path):
+        auto_load_folder_content(parent, folder_path)
+    else:
+        print(f"[INFO] Folder does not contain MP4 files, skipping auto-load: {folder_path}")
 
 def auto_load_folder_content(parent, folder_path):
     """Automatically load first CSV and first video from the folder"""
     try:
-        # Find all CSV files
-        csv_files = [f for f in os.listdir(folder_path) 
-                    if f.lower().endswith('.csv') and os.path.isfile(os.path.join(folder_path, f))]
+        # Ensure folder_path is absolute and exists
+        folder_path = os.path.abspath(folder_path)
+        if not os.path.isdir(folder_path):
+            print(f"Error: Folder does not exist: {folder_path}")
+            return
         
-        # Find all video files
+        # Get folder name and cache directory path
+        folder_name = os.path.basename(folder_path.rstrip('/\\'))
+        
+        # Get project root (parent of app directory)
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(app_dir)
+        cache_dir = os.path.join(project_root, "cache", folder_name)
+        
+        # Ensure cache directory exists
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # Find all CSV files in the cache directory
+        csv_files = []
+        if os.path.exists(cache_dir):
+            csv_files = [f for f in os.listdir(cache_dir) 
+                        if f.lower().endswith('.csv') and os.path.isfile(os.path.join(cache_dir, f))]
+        
+        # Find all video files in the video folder
         video_files = [f for f in os.listdir(folder_path) 
                       if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.wmv')) 
                       and os.path.isfile(os.path.join(folder_path, f))]
         
         # Create CSV with video titles if none exists and videos are present
         if not csv_files and video_files:
-            csv_path = create_video_based_csv(folder_path, video_files)
+            csv_path = create_video_based_csv(cache_dir, video_files, folder_name)
             if csv_path:
                 csv_files = [os.path.basename(csv_path)]
                 print(f"Created new CSV with video titles: {csv_path}")
         
-        # Load first CSV if available
+        # Load first CSV if available (from cache directory)
         if csv_files and hasattr(parent, 'load_csv_file'):
-            first_csv = os.path.join(folder_path, csv_files[0])
-            parent.load_csv_file(first_csv)
-            print(f"Loaded CSV: {csv_files[0]}")
+            first_csv = os.path.join(cache_dir, csv_files[0])
+            if os.path.exists(first_csv):
+                parent.load_csv_file(first_csv)
+                print(f"Loaded CSV: {os.path.abspath(first_csv)}")
+            else:
+                print(f"Warning: CSV file not found: {first_csv}")
         
         # Load and play first video if available
         if video_files and hasattr(parent, 'open_video_file'):
@@ -200,36 +226,45 @@ def auto_load_folder_content(parent, folder_path):
             parent.open_video_file(first_video)
             print(f"Playing video: {video_files[0]}")
             
+
     except Exception as e:
         print(f"Error auto-loading folder content: {e}")
+        import traceback
+        traceback.print_exc()
 
-def create_video_based_csv(folder_path, video_files):
+def create_video_based_csv(output_dir, video_files, folder_name=None):
     """Create a CSV file with video clip names as the first column"""
     try:
-        # Get folder name for CSV filename
-        folder_name = os.path.basename(folder_path.rstrip('/\\'))
+        # Get folder name for CSV filename if not provided
+        if folder_name is None:
+            folder_name = os.path.basename(output_dir.rstrip('/\\'))
+        
         csv_filename = f"{folder_name}_data.csv"
-        csv_path = os.path.join(folder_path, csv_filename)
+        csv_path = os.path.join(output_dir, csv_filename)
         
         # Check if CSV already exists (shouldn't, but just in case)
         if os.path.exists(csv_path):
             return csv_path
+        
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
         
         # Create CSV with video clip names as the first column
         video_names = [os.path.splitext(video)[0] for video in video_files]  # Remove extensions
         
         # Create default data structure with video names as the first column
         default_data = {
-            'Clip Name': video_names,
-            'Timestamp': ['00:00:00'] * len(video_files),
-            'Player': [''] * len(video_files),
-            'Action': [''] * len(video_files),
-            'Score': [0] * len(video_files),
-            'Team': [''] * len(video_files),
-            'Quarter': [1] * len(video_files),
-            'Game Time': ['00:00'] * len(video_files),
-            'X Position': [0] * len(video_files),
-            'Y Position': [0] * len(video_files)
+            'CLIP NAME': video_names,
+            'HASH': 0,
+            'YARD LINE': 0,
+            'DIST': 0,
+            'PERSONNEL' : 0,
+            'Backfield' : "",
+            'FIB/FSL' : "",
+            'OFF FORM' : "",
+            'FORM VARIATION': "",
+            'SET': "",
+            'WR SPLITS': "",
         }
         
         # Create DataFrame and save as CSV
@@ -256,20 +291,3 @@ def open_video_file(parent, video_path):
     parent.play_button.setText("▶")
     print(f"Video loaded: {video_path}")
 
-
-
-def create_video_based_csv_from_folder(parent, folder_path):
-    """Create CSV from folder for context menu"""
-    try:
-        video_files = [f for f in os.listdir(folder_path) 
-                      if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.wmv')) 
-                      and os.path.isfile(os.path.join(folder_path, f))]
-        
-        if video_files:
-            csv_path = create_video_based_csv(folder_path, video_files)
-            if csv_path and hasattr(parent, 'load_csv_file'):
-                parent.load_csv_file(csv_path)
-        else:
-            print("No video files found to create data sheet")
-    except Exception as e:
-        print(f"Error creating data sheet from context menu: {e}")
