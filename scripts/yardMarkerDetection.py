@@ -26,7 +26,7 @@ YARD_MARKER_CLASSES = {
     14: 'nr1', 15: 'nr2', 16: 'nr3', 17: 'nr4'
 }
 
-def yardMarkerDetection(video_path, model_path="yolo_models/yardMarker2.pt", confidence_threshold=0.5):
+def yardMarkerDetection(video_path, model_path="yolo_models/TRYTHISONE.pt", confidence_threshold=0.5):
     """
     Detect yard markers in video frames using a trained YOLO model
     
@@ -203,7 +203,7 @@ def main():
     parser.add_argument('--video', type=str, required=True, help='Path to input video file')
     parser.add_argument('--output', type=str, default='cache/yardMarkerDetection.json', 
                        help='Path to output JSON file')
-    parser.add_argument('--model', type=str, default='yolo_models/yardMarker2.pt',
+    parser.add_argument('--model', type=str, default='yolo_models/TRYTHISONE.pt',
                        help='Path to YOLO model file')
     parser.add_argument('--confidence', type=float, default=0.5,
                        help='Confidence threshold for detections')
