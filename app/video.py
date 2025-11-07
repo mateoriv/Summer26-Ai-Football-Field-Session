@@ -1038,7 +1038,13 @@ def set_current_video_path(parent, video_path):
     if hasattr(parent, 'current_folder') and hasattr(parent, 'virtual_field'):
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         from virtualField import load_homography_data_for_virtual_field
-        load_homography_data_for_virtual_field(parent, video_name, parent.current_folder)
+        homography_loaded = load_homography_data_for_virtual_field(parent, video_name, parent.current_folder)
+        # If homography data not found, ensure virtual field is cleared
+        if not homography_loaded:
+            # Clear the virtual field display
+            if hasattr(parent, 'virtual_field'):
+                parent.virtual_field.current_frame = 0
+                parent.virtual_field.update()
     
     # Sync the video widget's internal state with the parent's button states
     if hasattr(parent, 'custom_video'):

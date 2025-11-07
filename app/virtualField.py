@@ -65,15 +65,33 @@ class VirtualFieldWidget(QWidget):
                 with open(homography_file, 'r') as f:
                     self.homography_data = json.load(f)
                 print(f"Loaded homography data: {self.homography_data.get('total_frames')} frames")
+                
+                # Set to first frame if homography data exists
+                if self.homography_data and 'normalized_positions' in self.homography_data:
+                    normalized_positions = self.homography_data['normalized_positions']
+                    if normalized_positions:
+                        # Find the first frame (minimum frame number)
+                        frame_numbers = [int(k) for k in normalized_positions.keys() if k.isdigit()]
+                        if frame_numbers:
+                            first_frame = min(frame_numbers)
+                            self.current_frame = first_frame
+                            self.update()  # Update display to show first frame
+                            print(f"Set virtual field to first frame: {first_frame}")
+                
                 return True
             else:
                 print(f"Homography file not found: {homography_file}")
-                print("lol")
+                # Clear homography data and reset frame to clear the display
                 self.homography_data = None
+                self.current_frame = 0
+                self.update()  # Force repaint to clear player dots
                 return False
         except Exception as e:
             print(f"Error loading homography data: {e}")
+            # Clear homography data and reset frame to clear the display
             self.homography_data = None
+            self.current_frame = 0
+            self.update()  # Force repaint to clear player dots
             return False
     
     def set_current_frame(self, frame_number):

@@ -1021,6 +1021,9 @@ class ProcessingDialog(QDialog):
         self.add_output("\nProcessing completed successfully!")
         self.add_output(f"Results saved to: {results.get('homography_output', 'N/A')}")
         
+        # Reload data sheet and virtual field with updated data
+        self.reload_data_sheet_and_virtual_field()
+        
         # Show close button and hide other buttons
         self.cancel_button.setVisible(False)
         self.next_button.setVisible(False)
@@ -1028,6 +1031,51 @@ class ProcessingDialog(QDialog):
         
         # Re-enable close button
         self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+    
+    def reload_data_sheet_and_virtual_field(self):
+        """Reload the data sheet CSV and update virtual field with new homography data"""
+        parent_window = self.parent()
+        if not parent_window:
+            return
+        
+        try:
+            # Reload CSV file if it exists
+            if hasattr(parent_window, 'current_csv_path') and parent_window.current_csv_path:
+                if os.path.exists(parent_window.current_csv_path):
+                    self.add_output(f"Reloading data sheet: {parent_window.current_csv_path}")
+                    if hasattr(parent_window, 'load_csv_file'):
+                        parent_window.load_csv_file(parent_window.current_csv_path)
+                        self.add_output("Data sheet reloaded successfully")
+                else:
+                    # Try to find CSV in cache directory
+                    if hasattr(parent_window, 'current_folder') and parent_window.current_folder:
+                        folder_name = os.path.basename(parent_window.current_folder.rstrip('/\\'))
+                        app_dir = os.path.dirname(os.path.abspath(__file__))
+                        project_root = os.path.dirname(app_dir)
+                        csv_path = os.path.join(project_root, "cache", folder_name, f"{folder_name}_data.csv")
+                        if os.path.exists(csv_path) and hasattr(parent_window, 'load_csv_file'):
+                            self.add_output(f"Reloading data sheet from cache: {csv_path}")
+                            parent_window.load_csv_file(csv_path)
+                            self.add_output("Data sheet reloaded successfully")
+            
+            # Reload homography data for virtual field
+            if hasattr(parent_window, 'current_video_path') and parent_window.current_video_path:
+                video_name = os.path.splitext(os.path.basename(parent_window.current_video_path))[0]
+                if hasattr(parent_window, 'current_folder') and parent_window.current_folder:
+                    self.add_output(f"Reloading virtual field with updated homography data for: {video_name}")
+                    from virtualField import load_homography_data_for_virtual_field
+                    if load_homography_data_for_virtual_field(parent_window, video_name, parent_window.current_folder):
+                        # Update virtual field display with current frame
+                        if hasattr(parent_window, 'custom_video') and hasattr(parent_window.custom_video, 'current_frame'):
+                            from virtualField import update_virtual_field_with_video_frame
+                            update_virtual_field_with_video_frame(parent_window, parent_window.custom_video.current_frame)
+                            self.add_output("Virtual field updated with new homography data")
+                    else:
+                        self.add_output("Warning: Could not reload homography data for virtual field")
+        except Exception as e:
+            self.add_output(f"Error reloading data sheet/virtual field: {e}")
+            import traceback
+            self.add_output(traceback.format_exc())
     
     def processing_failed(self, error_message):
         """Handle processing failure"""

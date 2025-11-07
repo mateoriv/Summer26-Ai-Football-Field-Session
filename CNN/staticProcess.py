@@ -10,6 +10,8 @@ import json
 import os
 import sys
 import argparse
+import pandas as pd
+import numpy as np
 
 
 def load_data(file_path):
@@ -134,20 +136,96 @@ def get_player_data_for_frame(video_name, folder_name=None, cache_dir="cache", p
     return results
 
 
-def process_frame_data(frame_data):
+def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cache", project_root=None):
     """
-    Process frame data to get player data for snap frames.
+    Process frame data and update the associated CSV file.
     
     Args:
         frame_data: Dictionary with frame data containing player detections
+        video_name: Name of the video (without extension) - used to find the CSV row
+        folder_name: Name of the folder containing the video
+        cache_dir: Cache directory name (default: "cache")
+        project_root: Project root directory (defaults to parent of script directory)
     
     Returns:
-        Dictionary with processed frame data
+        Dictionary with processed frame data and update status
     """
     if frame_data is None:
         return None
-    print(f"[SUCCESS] Processed frame data: {frame_data}")
-    return frame_data
+    
+    # Get project root if not provided
+    if project_root is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+    
+    if folder_name is None:
+        print(f"[ERROR] Folder name required to access CSV file")
+        return None
+    
+    # Construct CSV file path
+    csv_file_path = os.path.join(project_root, cache_dir, folder_name, f"{folder_name}_data.csv")
+    print(f"[INFO] CSV file path: {csv_file_path}")
+    if not os.path.exists(csv_file_path):
+        print(f"[ERROR] CSV file not found: {csv_file_path}")
+        return None
+    
+    try:
+        # Load CSV file
+        df = pd.read_csv(csv_file_path)
+        print(f"[INFO] Loaded CSV file: {csv_file_path}")
+        
+        # Find the row matching the video name
+        # The CSV has a 'CLIP NAME' column that should match the video name
+        video_row_index = None
+        for idx, row in df.iterrows():
+            clip_name = str(row.get('CLIP NAME', '')).strip()
+            if clip_name == video_name:
+                video_row_index = idx
+                break
+        
+        if video_row_index is None:
+            print(f"[WARNING] Video '{video_name}' not found in CSV file")
+            print(f"[INFO] Available clip names: {df['CLIP NAME'].tolist()[:10]}...")  # Show first 10
+            return frame_data
+        
+        print(f"[INFO] Found video '{video_name}' at row {video_row_index}")
+        
+        # Extract x positions from player detections
+        detections = frame_data.get('detections', [])
+        x_positions = []
+        
+        for detection in detections:
+            normalized_pos = detection.get('normalized_position', {})
+            x = normalized_pos.get('x')
+            if x is not None:
+                x_positions.append(x)
+        
+        # Calculate median x position and round to nearest integer
+        if x_positions:
+            median_x = np.median(x_positions)
+            yard_line = int(round(median_x))
+            print(f"[INFO] Calculated median x position: {median_x:.2f}, rounded to yard line: {yard_line}")
+            
+            # Update CSV row with yard line
+            df.at[video_row_index, 'YARD LINE'] = yard_line
+        else:
+            print(f"[WARNING] No x positions found in detections, skipping yard line update")
+        
+        # Save the updated CSV
+        df.to_csv(csv_file_path, index=False)
+        print(f"[SUCCESS] Updated and saved CSV file: {csv_file_path}")
+        
+        return {
+            "frame_data": frame_data,
+            "csv_updated": True,
+            "row_index": video_row_index
+        }
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to process CSV file: {e}")
+        import traceback
+        traceback.print_exc()
+        return frame_data
 
 
 def main():
@@ -173,10 +251,20 @@ def main():
         print("[ERROR] Failed to retrieve player data for snap frames")
         sys.exit(1)
     
-    processed_frame_data = process_frame_data(frame_data)
+    # Process frame data and update CSV
+    processed_frame_data = process_frame_data(
+        frame_data=frame_data,
+        video_name=args.video_name,
+        folder_name=args.folder_name,
+        cache_dir=args.cache_dir
+    )
     
-   
-    return None
+    if processed_frame_data:
+        print("[SUCCESS] Processing completed successfully")
+    else:
+        print("[WARNING] Processing completed but CSV update may have failed")
+    
+    return processed_frame_data
 
 
 if __name__ == "__main__":
