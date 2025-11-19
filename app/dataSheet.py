@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QDockWidget, QTableView, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QDockWidget, QTableView, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QHBoxLayout, QLabel, QPushButton, QFileDialog, QMessageBox
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QFont
 import pandas as pd
@@ -244,6 +244,30 @@ def create_data_sheet_title_bar(dock, parent):
     layout.setContentsMargins(8, 4, 8, 4)
     layout.setSpacing(8)
     
+    # Export CSV button (left of title)
+    export_csv_btn = QPushButton("Export CSV")
+    export_csv_btn.setFixedSize(70, 20)
+    export_csv_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #6c757d;
+            border: none;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+            font-size: 10px;
+        }
+        QPushButton:hover {
+            background-color: #5a6268;
+        }
+        QPushButton:pressed {
+            background-color: #545b62;
+        }
+    """)
+    export_csv_btn.setToolTip("Export CSV to Selected Folder")
+    export_csv_btn.clicked.connect(lambda: export_csv_to_folder(parent))
+    layout.addWidget(export_csv_btn)
+    
     # Left spacer to center the title
     left_spacer = QWidget()
     left_spacer.setFixedWidth(60)  # Space for buttons on the right
@@ -375,3 +399,61 @@ def batch_process_videos(parent):
     from batchProcessingDialog import BatchProcessingDialog
     dialog = BatchProcessingDialog(parent)
     dialog.exec()
+
+def export_csv_to_folder(parent):
+    """Export the current CSV data to a selected folder"""
+    # Check if there's data to export
+    if not hasattr(parent, 'csv_model') or parent.csv_model._data.empty:
+        QMessageBox.warning(parent, "No Data", "No data available to export. Please load a video folder first.")
+        return
+    
+    # Open folder selection dialog
+    folder = QFileDialog.getExistingDirectory(parent, "Select Folder to Export CSV")
+    if not folder:
+        return  # User cancelled
+    
+    try:
+        # Get the current CSV filename or use a default name
+        if hasattr(parent, 'current_csv_path') and parent.current_csv_path:
+            csv_filename = os.path.basename(parent.current_csv_path)
+        else:
+            # Generate a default filename based on current folder or timestamp
+            if hasattr(parent, 'current_folder') and parent.current_folder:
+                folder_name = os.path.basename(parent.current_folder.rstrip('/\\'))
+                csv_filename = f"{folder_name}_data.csv"
+            else:
+                import time
+                csv_filename = f"exported_data_{int(time.time())}.csv"
+        
+        # Construct full path
+        csv_path = os.path.join(folder, csv_filename)
+        
+        # Check if file already exists
+        if os.path.exists(csv_path):
+            reply = QMessageBox.question(
+                parent, 
+                "File Exists", 
+                f"The file '{csv_filename}' already exists in this folder. Do you want to overwrite it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+        
+        # Export the data
+        parent.csv_model._data.to_csv(csv_path, index=False)
+        
+        QMessageBox.information(
+            parent, 
+            "Export Successful", 
+            f"CSV file exported successfully to:\n{csv_path}"
+        )
+        print(f"CSV exported to: {csv_path}")
+        
+    except Exception as e:
+        QMessageBox.critical(
+            parent, 
+            "Export Failed", 
+            f"An error occurred while exporting the CSV:\n{str(e)}"
+        )
+        print(f"Error exporting CSV: {str(e)}")
