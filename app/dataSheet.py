@@ -407,8 +407,18 @@ def export_csv_to_folder(parent):
         QMessageBox.warning(parent, "No Data", "No data available to export. Please load a video folder first.")
         return
     
-    # Open folder selection dialog
-    folder = QFileDialog.getExistingDirectory(parent, "Select Folder to Export CSV")
+    # Get the default folder from file access tree view root path
+    default_folder = ""
+    if hasattr(parent, 'tree_model'):
+        root_path = parent.tree_model.rootPath()
+        if root_path and os.path.exists(root_path):
+            default_folder = root_path
+    # Fallback to current_folder if tree_model root path is not available
+    if not default_folder and hasattr(parent, 'current_folder') and parent.current_folder:
+        default_folder = parent.current_folder
+    
+    # Open folder selection dialog with default folder
+    folder = QFileDialog.getExistingDirectory(parent, "Select Folder to Export CSV", default_folder)
     if not folder:
         return  # User cancelled
     
