@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, 
     QTextEdit, QPushButton, QFrame, QWidget, QFileDialog, QListWidget, QListWidgetItem, QSpinBox
 )
-from PySide6.QtCore import Qt, QThread, QTimer, Signal, QProcess
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QTextCursor
 import subprocess
 import os
@@ -17,7 +17,6 @@ import json
 import time
 from pathlib import Path
 import glob
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import threading
 import multiprocessing
 
@@ -48,115 +47,165 @@ def get_python_executable():
 if __name__ == '__main__':
     multiprocessing.freeze_support()
 
+class ProcessingCancelled(Exception):
+    """Raised when batch processing is cancelled by the user."""
+    pass
+
+
 def process_single_video_standalone(video_path, video_folder, output_dir="cache"):
-    """Standalone function to process a single video - used with ProcessPoolExecutor"""
+    """Standalone function kept for future multi-processing support."""
+    return process_single_video(
+        video_path,
+        video_folder,
+        output_dir=output_dir,
+        output_callback=lambda msg: print(msg, flush=True)
+    )
+
+
+def process_single_video(video_path, video_folder, output_dir="cache", output_callback=None, status_callback=None, cancel_check=None):
+    """Process a single video sequentially, mirroring ProcessingDialog steps."""
+    emit_output = output_callback or (lambda msg: print(msg, flush=True))
+    emit_status = status_callback or (lambda msg: emit_output(msg))
+    
     try:
         video_name = Path(video_path).stem
         
-        # If output_dir is relative, make it relative to project root, not app directory
         if not os.path.isabs(output_dir):
-            # Get project root (parent of app directory)
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             output_dir = os.path.join(project_root, output_dir)
         else:
             output_dir = os.path.abspath(output_dir)
         
-        # Ensure video folder exists in output directory
-        os.makedirs(f"{output_dir}/{video_folder}", exist_ok=True)
-        os.makedirs(f"{output_dir}/{video_folder}/players", exist_ok=True)
-        os.makedirs(f"{output_dir}/{video_folder}/yard_markers", exist_ok=True)
-        os.makedirs(f"{output_dir}/{video_folder}/correspondence", exist_ok=True)
-        os.makedirs(f"{output_dir}/{video_folder}/homography", exist_ok=True)
-        os.makedirs(f"{output_dir}/{video_folder}/virtual_field", exist_ok=True)
-        os.makedirs(f"{output_dir}/{video_folder}/results", exist_ok=True)
+        if video_folder:
+            video_folder = os.path.basename(video_folder.rstrip("/\\"))
+        else:
+            video_folder = Path(video_path).parent.name
+        base_dir = os.path.join(output_dir, video_folder)
         
-        # Step 1: Player Detection
-        detection_output = f"{output_dir}/{video_folder}/players/{video_name}_detection.json"
-        detection_cmd = [
-            get_python_executable(), "scripts/playerDetection.py", 
-            "--video", video_path, 
-            "--output", detection_output
+        directories = [
+            base_dir,
+            os.path.join(base_dir, "players"),
+            os.path.join(base_dir, "snap_detection"),
+            os.path.join(base_dir, "yard_markers"),
+            os.path.join(base_dir, "correspondence"),
+            os.path.join(base_dir, "homography"),
+            os.path.join(base_dir, "virtual_field"),
+            os.path.join(base_dir, "results"),
+        ]
+        for directory in directories:
+            os.makedirs(directory, exist_ok=True)
+        
+        detection_output = os.path.join(base_dir, "players", f"{video_name}_detection.json")
+        snap_output = os.path.join(base_dir, "snap_detection", f"{video_name}_snap_detection.json")
+        yard_marker_output = os.path.join(base_dir, "yard_markers", f"{video_name}_yard_markers.json")
+        correspondence_output = os.path.join(base_dir, "correspondence", f"{video_name}_correspondence.json")
+        homography_output = os.path.join(base_dir, "homography", f"{video_name}_normalized_positions.json")
+        
+        steps = [
+            {
+                "name": "Player Detection",
+                "cmd": [
+                    get_python_executable(), "scripts/playerDetection.py",
+                    "--video", video_path,
+                    "--output", detection_output
+                ]
+            },
+            {
+                "name": "Snap Detection",
+                "cmd": [
+                    get_python_executable(), "scripts/snapDetection.py",
+                    "--player-detections", detection_output,
+                    "--output", snap_output
+                ]
+            },
+            {
+                "name": "Yard Marker Detection",
+                "cmd": [
+                    get_python_executable(), "scripts/yardMarkerDetection.py",
+                    "--video", video_path,
+                    "--output", yard_marker_output
+                ]
+            },
+            {
+                "name": "Correspondence Points Generation",
+                "cmd": [
+                    get_python_executable(), "scripts/autoCorrespondancePoints.py",
+                    "--detection-json", yard_marker_output,
+                    "--output", correspondence_output,
+                    "--confidence", "0.7",
+                    "--per-frame"
+                ]
+            },
+            {
+                "name": "Homography Transformation",
+                "cmd": [
+                    get_python_executable(), "scripts/perFrameHomographyTransform.py",
+                    "--player-detections", detection_output,
+                    "--correspondence-points", correspondence_output,
+                    "--output", homography_output
+                ],
+                "prereq": correspondence_output
+            },
+            {
+                "name": "Static Process",
+                "cmd": [
+                    get_python_executable(), "CNN/staticProcess.py",
+                    "--video-name", video_name,
+                    "--folder-name", video_folder,
+                    "--cache-dir", output_dir
+                ],
+                "prereq": [snap_output, homography_output]
+            }
         ]
         
-        if not _run_command_standalone(detection_cmd, "Player Detection"):
-            return False
-        
-        # Step 2: Snap Detection
-        snap_output = f"{output_dir}/{video_folder}/{video_name}_snap_detection.json"
-        snap_cmd = [
-            get_python_executable(), "scripts/snapDetection.py",
-            "--player-detections", detection_output,
-            "--output", snap_output
-        ]
-        
-        if not _run_command_standalone(snap_cmd, "Snap Detection"):
-            return False
-        
-        # Step 3: Yard Marker Detection
-        yard_marker_output = f"{output_dir}/{video_folder}/yard_markers/{video_name}_yard_markers.json"
-        yard_marker_cmd = [
-            get_python_executable(), "scripts/yardMarkerDetection.py",
-            "--video", video_path,
-            "--output", yard_marker_output
-        ]
-        
-        if not _run_command_standalone(yard_marker_cmd, "Yard Marker Detection"):
-            return False
-        
-        # # Step 3: Auto Correspondence Points
-        # correspondence_output = f"{output_dir}/{video_folder}/correspondence/{video_name}_correspondence.json"
-        # correspondence_cmd = [
-        #     get_python_executable(), "scripts/autoCorrespondancePoints.py",
-        #     "--detection-json", yard_marker_output,
-        #     "--output", correspondence_output,
-        #     "--confidence", "0.7"
-        # ]
-        
-        # if not _run_command_standalone(correspondence_cmd, "Correspondence Points Generation"):
-        #     return False
-        
-        # # Step 4: Homography Transformation
-        # if os.path.exists(correspondence_output):
-        #     homography_output = f"{output_dir}/{video_folder}/{video_name}_homography.json"
-        #     homography_cmd = [
-        #         get_python_executable(), "scripts/homographyTransform.py",
-        #         "--input", detection_output,
-        #         "--correspondence", correspondence_output,
-        #         "--output", homography_output
-        #     ]
+        emit_output(f"Starting processing for {video_name}")
+        for step in steps:
+            if cancel_check and cancel_check():
+                raise ProcessingCancelled("Processing cancelled before step start")
             
-        #     if not _run_command_standalone(homography_cmd, "Homography Transformation"):
-        #         return False
-        # else:
-        #     print(f"No correspondence points found for {video_name}, skipping homography transformation")
-        
-        # # Step 5: Render Field Video
-        # if os.path.exists(homography_output):
-        #     field_video_output = f"{output_dir}/{video_folder}/virtual_field/{video_name}_field.mp4"
-        #     render_cmd = [
-        #         get_python_executable(), "scripts/renderFieldVideo.py",
-        #         "--input", homography_output,
-        #         "--output", field_video_output
-        #     ]
+            step_name = step["name"]
+            emit_status(f"{step_name} in progress")
             
-        #     if not _run_command_standalone(render_cmd, "Field Video Rendering"):
-        #         return False
-        # else:
-        #     print(f"No homography data found for {video_name}, skipping field video rendering")
+            prereq = step.get("prereq")
+            if prereq:
+                missing = []
+                if isinstance(prereq, list):
+                    missing = [p for p in prereq if not os.path.exists(p)]
+                else:
+                    if not os.path.exists(prereq):
+                        missing = [prereq]
+                if missing:
+                    emit_output(f"Missing prerequisites for {step_name}: {missing}")
+                    return False
+            
+            success = _run_command_standalone(
+                step["cmd"],
+                step_name,
+                output_callback=lambda msg, step_name=step_name: emit_output(f"{step_name}: {msg}"),
+                cancel_check=cancel_check
+            )
+            
+            if not success:
+                emit_output(f"{step_name} failed for {video_name}")
+                return False
+            
+            emit_output(f"✓ {step_name} completed for {video_name}")
         
+        emit_output(f"All steps completed for {video_name}")
         return True
-        
+    
+    except ProcessingCancelled:
+        raise
     except Exception as e:
-        print(f"Error processing {video_name}: {str(e)}")
+        emit_output(f"Error processing {video_path}: {str(e)}")
         return False
 
-def _run_command_standalone(cmd, step_name):
-    """Standalone function to run a command - used with ProcessPoolExecutor"""
-    # Get the correct working directory (project root)
+def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=None):
+    """Run a command and stream output, optionally supporting cancellation."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    emit_output = output_callback or (lambda msg: print(msg, flush=True))
     
     try:
-        # Start the process with correct working directory
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
         
@@ -165,21 +214,39 @@ def _run_command_standalone(cmd, step_name):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,
+            universal_newlines=True,
             cwd=project_root,
             env=env
         )
         
-        # Wait for process to complete
+        while True:
+            if cancel_check and cancel_check():
+                process.terminate()
+                raise ProcessingCancelled(f"{step_name} cancelled")
+            
+            line = process.stdout.readline()
+            if not line:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.05)
+                continue
+            
+            emit_output(line.strip())
+        
+        process.stdout.close()
         return_code = process.wait()
         
         if return_code == 0:
             return True
-        else:
-            print(f"{step_name} failed with return code {return_code}")
-            return False
-            
+        
+        emit_output(f"{step_name} failed with return code {return_code}")
+        return False
+    
+    except ProcessingCancelled:
+        raise
     except Exception as e:
-        print(f"Error running {step_name}: {str(e)}")
+        emit_output(f"Error running {step_name}: {str(e)}")
         return False
 
 class BatchProcessingWorker(QThread):
@@ -202,7 +269,6 @@ class BatchProcessingWorker(QThread):
         else:
             self.output_dir = os.path.abspath(output_dir)
         self.max_workers = max_workers
-        self.process = None
         self.is_cancelled = False
         self.current_video_index = 0
         self.total_videos = len(video_paths)
@@ -223,94 +289,91 @@ class BatchProcessingWorker(QThread):
         return self.is_cancelled
         
     def run(self):
-        """Run batch processing for all videos with parallel processing"""
+        """Run batch processing sequentially (infrastructure ready for future parallelism)."""
         try:
             self.output_received.emit(f"Starting batch processing of {self.total_videos} videos")
-            self.output_received.emit(f"Using {self.max_workers} parallel workers")
+            self.output_received.emit("Running in sequential mode (multi-worker ready)")
             self.output_received.emit("-" * 50)
             
-            # Ensure output directory exists
+            if self.total_videos == 0:
+                self.progress_updated.emit(100, "No videos to process")
+                final_results = {
+                    "total_videos": 0,
+                    "completed_videos": 0,
+                    "failed_videos": 0,
+                    "results": [],
+                    "status": "completed"
+                }
+                self.batch_completed.emit(final_results)
+                return
+            
             os.makedirs(self.output_dir, exist_ok=True)
             
-            # Use ProcessPoolExecutor for true parallel processing
-            with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
-                # Submit all video processing tasks
-                future_to_video = {}
-                for i, video_path in enumerate(self.video_paths):
-                    if self.is_cancelled:
-                        self.output_received.emit("Processing cancelled before starting")
-                        return
-                    
-                    video_name = Path(video_path).stem
-                    video_folder = os.path.basename(os.path.dirname(video_path))
-                    
-                    # Submit the processing task
-                    future = executor.submit(process_single_video_standalone, video_path, video_folder, self.output_dir)
-                    future_to_video[future] = (i, video_path, video_name)
+            for index, video_path in enumerate(self.video_paths, start=1):
+                if self.is_cancelled:
+                    raise ProcessingCancelled("Processing cancelled before next clip")
                 
-                # Process completed tasks as they finish
-                for future in as_completed(future_to_video):
-                    if self.is_cancelled:
-                        # Cancel remaining futures
-                        self.output_received.emit("Cancelling remaining tasks...")
-                        for remaining_future in future_to_video:
-                            if not remaining_future.done():
-                                remaining_future.cancel()
-                        self.output_received.emit("Batch processing cancelled")
-                        self.batch_cancelled.emit()
-                        return
+                video_name = Path(video_path).stem or f"video_{index}"
+                video_folder = os.path.basename(os.path.dirname(video_path)) or ""
+                clip_label = f"[Clip {index}/{self.total_videos}] {video_name}"
+                
+                self.output_received.emit(f"{clip_label} - starting")
+                
+                def clip_output(message, prefix=clip_label):
+                    self.output_received.emit(f"{prefix}: {message}")
+                
+                def clip_status(step_message, current_index=index, current_name=video_name):
+                    processed_so_far = self.completed_videos + self.failed_videos
+                    progress_percent = int((processed_so_far / self.total_videos) * 100) if self.total_videos else 0
+                    status = f"Clip {current_index}/{self.total_videos} - {current_name}: {step_message}"
+                    self.progress_updated.emit(progress_percent, status)
+                
+                try:
+                    success = process_single_video(
+                        video_path,
+                        video_folder,
+                        output_dir=self.output_dir,
+                        output_callback=clip_output,
+                        status_callback=clip_status,
+                        cancel_check=self.is_cancelled_check
+                    )
+                except ProcessingCancelled:
+                    self.output_received.emit("Batch processing cancelled by user")
+                    self.batch_cancelled.emit()
+                    return
+                except Exception as e:
+                    clip_output(f"Unexpected error: {e}")
+                    success = False
+                
+                with self.lock:
+                    if success:
+                        self.completed_videos += 1
+                        self.video_completed.emit(video_name, True)
+                        clip_output("Completed successfully")
+                    else:
+                        self.failed_videos += 1
+                        self.video_completed.emit(video_name, False)
+                        clip_output("Failed")
                     
-                    i, video_path, video_name = future_to_video[future]
+                    result_entry = {
+                        "video_path": video_path,
+                        "video_name": video_name,
+                        "success": success,
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    if not success:
+                        result_entry["error"] = "Processing failed"
+                    self.results.append(result_entry)
                     
-                    try:
-                        # Add timeout to prevent hanging
-                        success = future.result(timeout=300)  # 5 minute timeout per video
-                        
-                        
-                        with self.lock:
-                            if success:
-                                self.completed_videos += 1
-                                self.video_completed.emit(video_name, True)
-                                self.output_received.emit(f"[OK] {video_name} completed successfully")
-                            else:
-                                self.failed_videos += 1
-                                self.video_completed.emit(video_name, False)
-                                self.output_received.emit(f"[FAIL] {video_name} failed")
-                            
-                            # Add to results
-                            self.results.append({
-                                "video_path": video_path,
-                                "video_name": video_name,
-                                "success": success,
-                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                            })
-                            
-                            # Update progress
-                            total_processed = self.completed_videos + self.failed_videos
-                            overall_progress = int((total_processed / self.total_videos) * 100)
-                            self.progress_updated.emit(overall_progress, f"Processed {total_processed}/{self.total_videos} videos")
-                            
-                    except Exception as e:
-                        with self.lock:
-                            self.failed_videos += 1
-                            self.video_completed.emit(video_name, False)
-                            self.output_received.emit(f"✗ {video_name} failed with error: {str(e)}")
-                            
-                            self.results.append({
-                                "video_path": video_path,
-                                "video_name": video_name,
-                                "success": False,
-                                "error": str(e),
-                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                            })
+                    total_processed = self.completed_videos + self.failed_videos
+                    overall_progress = int((total_processed / self.total_videos) * 100) if self.total_videos else 100
+                    self.progress_updated.emit(overall_progress, f"Processed {total_processed}/{self.total_videos} clips")
             
-            # Final progress update
             self.progress_updated.emit(100, "Batch processing completed!")
-            self.output_received.emit(f"\nBatch processing completed!")
+            self.output_received.emit("\nBatch processing completed!")
             self.output_received.emit(f"Successfully processed: {self.completed_videos}/{self.total_videos} videos")
             self.output_received.emit(f"Failed: {self.failed_videos}/{self.total_videos} videos")
             
-            # Return results
             final_results = {
                 "total_videos": self.total_videos,
                 "completed_videos": self.completed_videos,
@@ -319,7 +382,6 @@ class BatchProcessingWorker(QThread):
                 "status": "completed"
             }
             
-            # Save results to JSON
             results_file = f"{self.output_dir}/batch_results_{int(time.time())}.json"
             with open(results_file, 'w') as f:
                 json.dump(final_results, f, indent=2)
@@ -327,17 +389,13 @@ class BatchProcessingWorker(QThread):
             self.output_received.emit(f"Results saved to: {results_file}")
             self.batch_completed.emit(final_results)
             
+        except ProcessingCancelled:
+            self.output_received.emit("Batch processing cancelled by user")
+            self.batch_cancelled.emit()
         except Exception as e:
             error_msg = f"Error during batch processing: {str(e)}"
             self.output_received.emit(f"ERROR: {error_msg}")
             self.batch_failed.emit(error_msg)
-    
-    
-    def cancel(self):
-        """Cancel the batch processing"""
-        self.is_cancelled = True
-        if self.process:
-            self.process.terminate()
 
 
 class BatchProcessingDialog(QDialog):
@@ -560,14 +618,18 @@ class BatchProcessingDialog(QDialog):
         
         # Find all video files in the folder
         video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv']
-        self.video_paths = []
+        found_videos = []
+        seen = set()
         
         for ext in video_extensions:
-            pattern = os.path.join(folder, f"*{ext}")
-            self.video_paths.extend(glob.glob(pattern))
-            pattern = os.path.join(folder, f"*{ext.upper()}")
-            self.video_paths.extend(glob.glob(pattern))
+            for pattern in (os.path.join(folder, f"*{ext}"), os.path.join(folder, f"*{ext.upper()}")):
+                for video_path in glob.glob(pattern):
+                    if video_path not in seen:
+                        seen.add(video_path)
+                        found_videos.append(video_path)
         
+        self.video_paths = found_videos
+        print(f"Found {len(self.video_paths)} unique videos in {folder}: {self.video_paths}")
         # Enable start button if videos found
         if self.video_paths:
             self.start_button.setEnabled(True)
