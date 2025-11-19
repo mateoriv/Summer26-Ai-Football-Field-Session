@@ -89,7 +89,7 @@ class ProcessingWorker(QThread):
             detection_file = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
             return os.path.exists(detection_file)
         elif step_index == 1:  # Snap Detection
-            snap_file = f"{self.output_dir}/{self.video_folder}/{self.video_name}_snap_detection.json"
+            snap_file = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
             return os.path.exists(snap_file)
         elif step_index == 2:  # Yard Marker Detection
             yard_marker_file = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
@@ -103,7 +103,7 @@ class ProcessingWorker(QThread):
         elif step_index == 5:  # Static Process
             # Static process doesn't create a file, so we check if homography exists (prerequisite)
             homography_file = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
-            snap_file = f"{self.output_dir}/{self.video_folder}/{self.video_name}_snap_detection.json"
+            snap_file = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
             return os.path.exists(homography_file) and os.path.exists(snap_file)
         return False
     
