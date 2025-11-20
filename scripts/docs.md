@@ -15,7 +15,7 @@ The `scripts/` folder collects the command-line utilities that generate model ou
   ```
 
 - `yardMarkerDetection.py`  
-  Detects sideline yard markers using a specialized YOLO model (`yolo_models/yardMarker2.pt`). Outputs a JSON payload mirroring the player format but focused on marker classes like `fl1`, `nr3`, etc. These detections can drive correspondence estimation and field calibration.
+  Detects sideline yard markers using a specialized YOLO model (`yolo_models/bestYardMarker.pt`). Outputs a JSON payload mirroring the player format but focused on marker classes like `fl1`, `nr3`, etc. These detections can drive correspondence estimation and field calibration.
   ```bash
   python scripts/yardMarkerDetection.py --video path/to/game.mp4 --output cache/session/yard_markers/game_yard_markers.json
   ```
