@@ -58,3 +58,9 @@ app_settings.json
 
 
 Experimentation/
+
+build/
+
+dist/
+
+cache/

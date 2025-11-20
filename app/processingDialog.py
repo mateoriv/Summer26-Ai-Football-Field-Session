@@ -18,6 +18,17 @@ import json
 import time
 from pathlib import Path
 
+def get_project_root():
+    """Return the project root, accounting for PyInstaller one-file extraction."""
+    if hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def get_resource_path(*relative_parts):
+    """Build an absolute path rooted at the project directory."""
+    return os.path.join(get_project_root(), *relative_parts)
+
+
 def get_python_executable():
     """Get the correct Python executable for the current platform"""
     if sys.platform.startswith('win'):
@@ -57,9 +68,7 @@ class ProcessingWorker(QThread):
         # Make output directory absolute to avoid working directory issues
         # If output_dir is relative, make it relative to project root, not app directory
         if not os.path.isabs(output_dir):
-            # Get project root (parent of app directory)
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            self.output_dir = os.path.join(project_root, output_dir)
+            self.output_dir = os.path.join(get_project_root(), output_dir)
         else:
             self.output_dir = os.path.abspath(output_dir)
         print(f"Output directory: {self.output_dir}")
@@ -204,7 +213,7 @@ class ProcessingWorker(QThread):
                 
                 
                 detection_cmd = [
-                    get_python_executable(), "scripts/playerDetection.py", 
+                    get_python_executable(), get_resource_path("scripts", "playerDetection.py"),
                     "--video", self.video_path, 
                     "--output", self.detection_output
                 ]
@@ -242,7 +251,7 @@ class ProcessingWorker(QThread):
                 self.output_received.emit("Step 2: Running snap detection...")
                 
                 snap_cmd = [
-                    get_python_executable(), "scripts/snapDetection.py",
+                    get_python_executable(), get_resource_path("scripts", "snapDetection.py"),
                     "--player-detections", self.detection_output,
                     "--output", self.snap_output
                 ]
@@ -281,7 +290,7 @@ class ProcessingWorker(QThread):
                 
                 
                 yard_marker_cmd = [
-                    get_python_executable(), "scripts/yardMarkerDetection.py",
+                    get_python_executable(), get_resource_path("scripts", "yardMarkerDetection.py"),
                     "--video", self.video_path,
                     "--output", yard_marker_output
                 ]
@@ -325,7 +334,7 @@ class ProcessingWorker(QThread):
 
                 
                 correspondence_cmd = [
-                    get_python_executable(), "scripts/autoCorrespondancePoints.py",
+                    get_python_executable(), get_resource_path("scripts", "autoCorrespondancePoints.py"),
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
                     "--confidence", "0.7",
@@ -373,7 +382,7 @@ class ProcessingWorker(QThread):
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
                     homography_cmd = [
-                        get_python_executable(), "scripts/perFrameHomographyTransform.py",
+                        get_python_executable(), get_resource_path("scripts", "perFrameHomographyTransform.py"),
                         "--player-detections", self.detection_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
@@ -436,7 +445,7 @@ class ProcessingWorker(QThread):
                     
                     # Run static process
                     static_process_cmd = [
-                        get_python_executable(), "CNN/staticProcess.py",
+                        get_python_executable(), get_resource_path("CNN", "staticProcess.py"),
                         "--video-name", self.video_name,
                         "--folder-name", self.video_folder,
                         "--cache-dir", "cache"
@@ -469,7 +478,7 @@ class ProcessingWorker(QThread):
             return False
             
         # Get the correct working directory (project root)
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        project_root = get_project_root()
         self.output_received.emit(f"Working directory: {project_root}")
         self.output_received.emit(f"Running: {' '.join(cmd)}")
         
@@ -1051,9 +1060,7 @@ class ProcessingDialog(QDialog):
                     # Try to find CSV in cache directory
                     if hasattr(parent_window, 'current_folder') and parent_window.current_folder:
                         folder_name = os.path.basename(parent_window.current_folder.rstrip('/\\'))
-                        app_dir = os.path.dirname(os.path.abspath(__file__))
-                        project_root = os.path.dirname(app_dir)
-                        csv_path = os.path.join(project_root, "cache", folder_name, f"{folder_name}_data.csv")
+                        csv_path = os.path.join(get_project_root(), "cache", folder_name, f"{folder_name}_data.csv")
                         if os.path.exists(csv_path) and hasattr(parent_window, 'load_csv_file'):
                             self.add_output(f"Reloading data sheet from cache: {csv_path}")
                             parent_window.load_csv_file(csv_path)

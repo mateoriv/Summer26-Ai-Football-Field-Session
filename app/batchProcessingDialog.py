@@ -20,6 +20,17 @@ import glob
 import threading
 import multiprocessing
 
+def get_project_root():
+    """Return project root, handling PyInstaller one-file extractions."""
+    if hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def get_resource_path(*parts):
+    return os.path.join(get_project_root(), *parts)
+
+
 def get_python_executable():
     """Get the correct Python executable for the current platform"""
     if sys.platform.startswith('win'):
@@ -71,8 +82,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
         video_name = Path(video_path).stem
         
         if not os.path.isabs(output_dir):
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            output_dir = os.path.join(project_root, output_dir)
+            output_dir = os.path.join(get_project_root(), output_dir)
         else:
             output_dir = os.path.abspath(output_dir)
         
@@ -105,7 +115,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             {
                 "name": "Player Detection",
                 "cmd": [
-                    get_python_executable(), "scripts/playerDetection.py",
+                    get_python_executable(), get_resource_path("scripts", "playerDetection.py"),
                     "--video", video_path,
                     "--output", detection_output
                 ]
@@ -113,7 +123,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             {
                 "name": "Snap Detection",
                 "cmd": [
-                    get_python_executable(), "scripts/snapDetection.py",
+                    get_python_executable(), get_resource_path("scripts", "snapDetection.py"),
                     "--player-detections", detection_output,
                     "--output", snap_output
                 ]
@@ -121,7 +131,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             {
                 "name": "Yard Marker Detection",
                 "cmd": [
-                    get_python_executable(), "scripts/yardMarkerDetection.py",
+                    get_python_executable(), get_resource_path("scripts", "yardMarkerDetection.py"),
                     "--video", video_path,
                     "--output", yard_marker_output
                 ]
@@ -129,7 +139,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             {
                 "name": "Correspondence Points Generation",
                 "cmd": [
-                    get_python_executable(), "scripts/autoCorrespondancePoints.py",
+                    get_python_executable(), get_resource_path("scripts", "autoCorrespondancePoints.py"),
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
                     "--confidence", "0.7",
@@ -139,7 +149,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             {
                 "name": "Homography Transformation",
                 "cmd": [
-                    get_python_executable(), "scripts/perFrameHomographyTransform.py",
+                    get_python_executable(), get_resource_path("scripts", "perFrameHomographyTransform.py"),
                     "--player-detections", detection_output,
                     "--correspondence-points", correspondence_output,
                     "--output", homography_output
@@ -149,7 +159,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             {
                 "name": "Static Process",
                 "cmd": [
-                    get_python_executable(), "CNN/staticProcess.py",
+                    get_python_executable(), get_resource_path("CNN", "staticProcess.py"),
                     "--video-name", video_name,
                     "--folder-name", video_folder,
                     "--cache-dir", output_dir
@@ -202,7 +212,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
 
 def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=None):
     """Run a command and stream output, optionally supporting cancellation."""
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = get_project_root()
     emit_output = output_callback or (lambda msg: print(msg, flush=True))
     
     try:
@@ -263,9 +273,7 @@ class BatchProcessingWorker(QThread):
         self.video_paths = video_paths
         # If output_dir is relative, make it relative to project root, not app directory
         if not os.path.isabs(output_dir):
-            # Get project root (parent of app directory)
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            self.output_dir = os.path.join(project_root, output_dir)
+            self.output_dir = os.path.join(get_project_root(), output_dir)
         else:
             self.output_dir = os.path.abspath(output_dir)
         self.max_workers = max_workers
