@@ -122,7 +122,7 @@ def main():
         total_detections = sum(len(frame['detections']) for frame in results['frames'])
         print(f"Detected {total_detections} player objects across {len(results['frames'])} frames")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Model Load Error: {e}")
         return 1
 
     return 0
