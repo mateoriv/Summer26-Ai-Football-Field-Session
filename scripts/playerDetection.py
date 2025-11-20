@@ -2,6 +2,7 @@ import cv2
 import json
 import os
 import numpy as np
+import sys
 from ultralytics import YOLO
 
 def playerDetection(video_path, model_path="yolo_models/bestPlayerDetectorM.pt", output_path="cache/playerDetection/playerDetection.json"):
@@ -129,4 +130,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

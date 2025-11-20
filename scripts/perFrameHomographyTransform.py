@@ -176,4 +176,4 @@ def main():
     process_per_frame_homography(args.player_detections, args.correspondence_points, args.output)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
