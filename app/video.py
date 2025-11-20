@@ -9,6 +9,18 @@ import os
 import cv2
 import numpy as np
 
+# Define colors for specific position labels
+POSITION_COLORS = {
+    'qb': QColor(255, 255, 0),              # Yellow
+    'oline': QColor(0, 0, 255),             # Blue
+    'running_back': QColor(255, 165, 0),    # Orange
+    'wide_receiver': QColor(0, 255, 255),   # Cyan
+    'tight_end': QColor(255, 0, 255),       # Magenta 
+    'defense': QColor(255, 0, 0),           # Red
+    'player': QColor(128, 128, 128),        # Gray (Generic Player Fallback)
+    'yard_marker': QColor(0, 255, 127)      # Spring Green (Yard Marker)
+}
+
 
 class SnapMarkerSlider(QWidget):
     """Custom slider widget that displays snap markers on the timeline"""
@@ -99,7 +111,7 @@ class CustomVideoWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background-color: black;")
-        self.detection_data = None
+        self.position_detection_data = None 
         self.yard_marker_data = None
         self.current_frame = 0
         self.show_boxes = False
@@ -116,16 +128,18 @@ class CustomVideoWidget(QWidget):
         self.timer.timeout.connect(self.update_frame)
         
     def set_detection_data(self, data):
-        """Set the detection data for player bounding boxes."""
-        self.detection_data = data
+        """
+        Set the detection data for player bounding boxes. 
+        """
+        self.position_detection_data = data
         if data is None:
-            print("Detection data cleared - no player bounding boxes will be shown")
+            print("Position detection data cleared - no bounding boxes will be shown")
         if data and 'frames' in data:
-            print(f"   Total player frames: {len(data['frames'])}")
+            print(f"   Total position frames: {len(data['frames'])}")
         self.update()
     
     def set_show_boxes(self, show):
-        """Set whether to show player bounding boxes."""
+        """Set whether to show player/position bounding boxes."""
         self.show_boxes = show
         self.update()
     
@@ -203,8 +217,8 @@ class CustomVideoWidget(QWidget):
                 
                 # Define data sources to draw
                 video_data_sources = []
-                if self.show_boxes and self.detection_data:
-                    video_data_sources.append(self.detection_data)
+                if self.show_boxes and self.position_detection_data:
+                    video_data_sources.append(self.position_detection_data)
                 
                 if self.show_yard_marker_boxes and self.yard_marker_data:
                     video_data_sources.append(self.yard_marker_data)
@@ -243,7 +257,7 @@ class CustomVideoWidget(QWidget):
         """
         [UNIFIED] Get detections for a specific frame number from a given data source (internal helper).
         
-        data_source: self.detection_data or self.yard_marker_data
+        data_source: self.position_detection_data or self.yard_marker_data
         """
         if not data_source or 'frames' not in data_source:
             return []
@@ -268,6 +282,7 @@ class CustomVideoWidget(QWidget):
     def _draw_single_bbox(self, painter, detection, scale_x, scale_y, x_offset=0, y_offset=0):
         """
         Draw a single bounding box with dynamic styling based on class (internal helper).
+        Uses POSITION_COLORS for dynamic coloring.
         """
         bbox = detection.get('bbox', {})
         if not bbox or 'x1' not in bbox:
@@ -285,15 +300,9 @@ class CustomVideoWidget(QWidget):
         scaled_w = int((x2 - x1) * scale_x)
         scaled_h = int((y2 - y1) * scale_y)
         
-        # Define colors based on class name
+        # Define colors based on class name using the mapping
         class_name = detection.get('class', 'player')
-        
-        if class_name == 'player':
-            box_color = QColor(0, 255, 0) # Green for players
-        elif class_name == 'yard_marker':
-            box_color = QColor(0, 255, 255) # Cyan for yard markers
-        else:
-            box_color = QColor(255, 255, 0) # Yellow fallback
+        box_color = POSITION_COLORS.get(class_name.lower(), POSITION_COLORS['player'])
         
         # Draw bounding box
         painter.setPen(QPen(box_color, 3))
@@ -301,10 +310,25 @@ class CustomVideoWidget(QWidget):
         painter.setBrush(QBrush(QColor(box_color.red(), box_color.green(), box_color.blue(), 50))) 
         painter.drawRect(scaled_x, scaled_y, scaled_w, scaled_h)
         
-        # Draw label
-        confidence = detection.get('confidence', 0.0)
-        painter.setPen(QPen(QColor(0, 0, 0), 1))  # Red text
-        painter.drawText(scaled_x, scaled_y - 5, f"{class_name} {confidence:.2f}")
+        # # Draw label
+        # confidence = detection.get('confidence', 0.0)
+        
+        # # Use contrasting text color (e.g., black or white based on background)
+        # # Using white text for general visibility against darker video content
+        # painter.setPen(QPen(QColor(255, 255, 255), 1))
+        
+        # # Draw a semi-transparent background rectangle for the text label
+        # text_label = f"{class_name} {confidence:.2f}"
+        # font_metrics = painter.fontMetrics()
+        # text_width = font_metrics.horizontalAdvance(text_label)
+        # text_height = font_metrics.height()
+        
+        # # Draw background rectangle for the text
+        # text_bg_rect = QRectF(scaled_x, scaled_y - text_height - 5, text_width + 6, text_height + 2)
+        # painter.fillRect(text_bg_rect, QBrush(QColor(0, 0, 0, 150))) # Dark semi-transparent background
+        
+        # # Draw the text on top
+        # painter.drawText(scaled_x + 3, scaled_y - 8, text_label)
         
     def force_update(self):
         self.update()
@@ -443,10 +467,12 @@ class SimpleOverlayWidget(QWidget):
         scaled_w = int(w * scale_x)
         scaled_h = int(h * scale_y)
         
+        box_color = POSITION_COLORS.get(class_name.lower(), POSITION_COLORS['player'])
+        
         bbox_label = QLabel(f"{class_name}\n{confidence:.2f}", self)
-        bbox_label.setStyleSheet("""
-            background-color: rgba(0, 255, 0, 100);
-            border: 2px solid green;
+        bbox_label.setStyleSheet(f"""
+            background-color: rgba({box_color.red()}, {box_color.green()}, {box_color.blue()}, 100);
+            border: 2px solid rgb({box_color.red()}, {box_color.green()}, {box_color.blue()});
             color: white;
             font-weight: bold;
             font-size: 10px;
@@ -625,10 +651,12 @@ class BoundingBoxGraphicsView(QGraphicsView):
         scaled_w = int(w * scale_x)
         scaled_h = int(h * scale_y)
         
+        box_color = POSITION_COLORS.get(class_name.lower(), POSITION_COLORS['player'])
+        
         # Create bounding box rectangle
         bbox_rect = QGraphicsRectItem(scaled_x, scaled_y, scaled_w, scaled_h)
-        bbox_rect.setPen(QPen(QColor(0, 255, 0), 4))
-        bbox_rect.setBrush(QBrush(QColor(0, 255, 0, 30)))
+        bbox_rect.setPen(QPen(box_color, 4))
+        bbox_rect.setBrush(QBrush(QColor(box_color.red(), box_color.green(), box_color.blue(), 30)))
         
         self.scene.addItem(bbox_rect)
         self.bounding_box_items.append(bbox_rect)
@@ -648,7 +676,7 @@ class BoundingBoxGraphicsView(QGraphicsView):
         
         text_item = QGraphicsTextItem(label_text)
         text_item.setPos(scaled_x, scaled_y - 25)
-        text_item.setDefaultTextColor(QColor(0, 0, 0))  # Red text
+        text_item.setDefaultTextColor(QColor(255, 255, 255))  # White text
         font = QFont("Arial", 10, QFont.Bold)
         text_item.setFont(font)
         self.scene.addItem(text_item)
@@ -1026,9 +1054,7 @@ def set_current_video_path(parent, video_path):
     
     load_video_for_custom_widget(parent, video_path)
     
-    # Always load both player and yard marker detection data when switching videos
-    # The visibility is controlled by the toggle buttons, but data is always loaded
-    load_and_set_detection_data(parent, "players")
+    load_and_set_detection_data(parent, "positions") 
     load_and_set_detection_data(parent, "yard_markers")
     
     # Load snap detection data for timeline markers
@@ -1056,7 +1082,7 @@ def toggle_bounding_boxes(parent, button):
     # Determine box type from button text 
     button_text = button.text().lower()
     if "player" in button_text:
-        box_type = "players"
+        box_type = "positions" 
     elif "yard" in button_text:
         box_type = "yard_markers"
     else:
@@ -1064,10 +1090,10 @@ def toggle_bounding_boxes(parent, button):
         return
     
     # Set up state variables based on box type
-    if box_type == "players":
+    if box_type == "positions":
         state_attr = "show_bounding_boxes"
-        display_name = "Player Bounding boxes"
-        data_type = "players"
+        display_name = "Position Bounding boxes"
+        data_type = "positions"
         setter_method = "set_show_boxes"
     elif box_type == "yard_markers":
         state_attr = "show_yard_marker_boxes"
@@ -1095,7 +1121,7 @@ def toggle_bounding_boxes(parent, button):
         if is_enabled:
             print(f"{display_name}: ON")
             load_and_set_detection_data(parent, data_type)
-            if box_type == "players":
+            if box_type == "positions":
                 custom_video.force_update()
         else:
             print(f"{display_name}: OFF")
@@ -1108,7 +1134,7 @@ def toggle_yard_marker_boxes(parent, button):
 
 def load_and_set_detection_data(parent, data_type):
     """
-    [UNIFIED] Load detection data for a specified data type ("players" or "yard_markers") 
+    [UNIFIED] Load detection data for a specified data type ("positions" or "yard_markers") 
     and set it in the video widget.
     """
     if not hasattr(parent, 'current_video_path') or not parent.current_video_path:
@@ -1119,9 +1145,9 @@ def load_and_set_detection_data(parent, data_type):
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     
     # Logic for determining the folder name based on data_type
-    if data_type == "players":
-        data_folder_name = "players"
-        file_suffix = "_detection"
+    if data_type == "positions":
+        data_folder_name = "positions"
+        file_suffix = "_position"
     elif data_type == "yard_markers":
         data_folder_name = "yard_markers"
         file_suffix = "_yard_markers"
@@ -1142,7 +1168,7 @@ def load_and_set_detection_data(parent, data_type):
             print(f"Loaded {data_type} data from {os.path.basename(detection_file)}: {len(data.get('frames', []))} frames")
             
             if hasattr(parent, 'custom_video'):
-                if data_type == "players":
+                if data_type == "positions":
                     parent.custom_video.set_detection_data(data)
                 elif data_type == "yard_markers":
                     parent.custom_video.yard_marker_data = data
@@ -1153,20 +1179,56 @@ def load_and_set_detection_data(parent, data_type):
         except Exception as e:
             print(f"Error loading {data_type} data: {e}")
             if hasattr(parent, 'custom_video'):
-                if data_type == "players":
+                if data_type == "positions":
                     parent.custom_video.set_detection_data(None)
                 elif data_type == "yard_markers":
                     parent.custom_video.yard_marker_data = None
     else:
-        print(f"{data_type.capitalize()} file not found: {detection_file}")
-        if hasattr(parent, 'custom_video'):
-            if data_type == "players":
-                parent.custom_video.set_detection_data(None)
-                parent.custom_video.set_show_boxes(False)
-            elif data_type == "yard_markers":
-                parent.custom_video.yard_marker_data = None
+        # FALLBACK: If position data is missing, try to load generic player detection data
+        if data_type == "positions":
+            print(f"Position file not found at {detection_file}. Falling back to generic player detection.")
+            load_and_set_detection_data_fallback(parent)
+        else:
+            print(f"{data_type.capitalize()} file not found: {detection_file}")
+            if hasattr(parent, 'custom_video'):
+                if data_type == "positions":
+                    parent.custom_video.set_detection_data(None)
+                    parent.custom_video.set_show_boxes(False)
+                elif data_type == "yard_markers":
+                    parent.custom_video.yard_marker_data = None
 
-        
+def load_and_set_detection_data_fallback(parent):
+    """
+    Loads generic player detection data if position data is missing, 
+    ensuring the video can still display *some* boxes.
+    """
+    video_path = parent.current_video_path
+    video_name = os.path.splitext(os.path.basename(video_path))[0]
+    
+    current_folder_name = getattr(parent, 'current_folder', 'default_folder')
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Path for generic player detection data
+    detection_file = os.path.join(project_root, "cache", os.path.basename(current_folder_name), "players", f"{video_name}_detection.json")
+    
+    if os.path.exists(detection_file):
+        try:
+            with open(detection_file, 'r') as f:
+                data = json.load(f)
+            
+            print(f"Loaded FALLBACK generic player data from {os.path.basename(detection_file)}.")
+            if hasattr(parent, 'custom_video'):
+                parent.custom_video.set_detection_data(data)
+                
+        except Exception as e:
+            print(f"Error loading FALLBACK player data: {e}")
+            if hasattr(parent, 'custom_video'):
+                parent.custom_video.set_detection_data(None)
+    else:
+        print(f"FALLBACK generic player file not found: {detection_file}")
+        if hasattr(parent, 'custom_video'):
+            parent.custom_video.set_detection_data(None)
+
 def pause_for_drag(parent):
     if hasattr(parent, 'player'):
         parent.was_playing_before_drag = (parent.player.playbackState() == QMediaPlayer.PlayingState)

@@ -74,7 +74,7 @@ class ProcessingWorker(QThread):
         print(f"Output directory: {self.output_dir}")
         self.process = None
         self.is_cancelled = False
-        self.current_step = 0  # 0: detection, 1: snap detection, 2: yard markers, 3: correspondence, 4: homography, 5: static process
+        self.current_step = 0
         self.video_name = None
         self.detection_output = None
         self.homography_output = None
@@ -93,23 +93,26 @@ class ProcessingWorker(QThread):
         self.user_choice_result = None
         
     def check_step_completed(self, step_index):
-        """Check if a processing step has already been completed"""
+        """Check if a processing step has already been completed""" 
         if step_index == 0:  # Player Detection
             detection_file = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
             return os.path.exists(detection_file)
-        elif step_index == 1:  # Snap Detection
+        elif step_index == 1: # Position Detection
+            position_file = f"{self.output_dir}/{self.video_folder}/positions/{self.video_name}_position.json"
+            return os.path.exists(position_file)
+        elif step_index == 2:  # Snap Detection
             snap_file = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
             return os.path.exists(snap_file)
-        elif step_index == 2:  # Yard Marker Detection
+        elif step_index == 3:  # Yard Marker Detection
             yard_marker_file = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
             return os.path.exists(yard_marker_file)
-        elif step_index == 3:  # Correspondence Points Generation
+        elif step_index == 4:  # Correspondence Points Generation
             correspondence_file = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
             return os.path.exists(correspondence_file)
-        elif step_index == 4:  # Homography Transformation
+        elif step_index == 5:  # Homography Transformation
             homography_file = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
             return os.path.exists(homography_file)
-        elif step_index == 5:  # Static Process
+        elif step_index == 6:  # Static Process
             # Static process doesn't create a file, so we check if homography exists (prerequisite)
             homography_file = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
             snap_file = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
@@ -183,6 +186,7 @@ class ProcessingWorker(QThread):
 
                 
             self.detection_output = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
+            self.position_output = f"{self.output_dir}/{self.video_folder}/positions/{self.video_name}_position.json"
             self.snap_output = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
             yard_marker_output = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
             correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
@@ -228,8 +232,8 @@ class ProcessingWorker(QThread):
                     self.step_completed.emit("Player Detection", False)
                     
             elif self.current_step == 1:
-                # Step 2: Snap Detection
-                step_name = "Snap Detection"
+                # Step 2: Position Detection
+                step_name = "Position Detection"
                 self.output_received.emit(f"Step 2: Checking {step_name}...")
                 
                 # Check if step is already completed
@@ -247,27 +251,28 @@ class ProcessingWorker(QThread):
                     else:  # rerun
                         self.output_received.emit(f"Re-running {step_name}...")
                 
-                self.progress_updated.emit(0, "Step 2: Initializing snap detection...")
-                self.output_received.emit("Step 2: Running snap detection...")
+                self.progress_updated.emit(0, "Step 2: Initializing position detection...")
+                self.output_received.emit("Step 2: Running position detection...")
                 
-                snap_cmd = [
-                    get_python_executable(), get_resource_path("scripts", "snapDetection.py"),
-                    "--player-detections", self.detection_output,
-                    "--output", self.snap_output
+                
+                position_cmd = [
+                    get_python_executable(), "scripts/positionDetection.py",
+                    "--video", self.video_path, 
+                    "--output", self.position_output
                 ]
                 
                 if self.is_cancelled:
                     return
                     
-                result = self._run_command(snap_cmd, "Snap Detection", 0, 100)
+                result = self._run_command(position_cmd, "Position Detection", 0, 100)
                 if result:
-                    self.step_completed.emit("Snap Detection", True)
+                    self.step_completed.emit("Position Detection", True)
                 else:
-                    self.step_completed.emit("Snap Detection", False)
+                    self.step_completed.emit("Position Detection", False)
                     
             elif self.current_step == 2:
-                # Step 3: Yard Marker Detection
-                step_name = "Yard Marker Detection"
+                # Step 3: Snap Detection
+                step_name = "Snap Detection"
                 self.output_received.emit(f"Step 3: Checking {step_name}...")
                 
                 # Check if step is already completed
@@ -285,8 +290,46 @@ class ProcessingWorker(QThread):
                     else:  # rerun
                         self.output_received.emit(f"Re-running {step_name}...")
                 
-                self.progress_updated.emit(0, "Step 3: Initializing yard marker detection...")
-                self.output_received.emit("Step 3: Running yard marker detection...")
+                self.progress_updated.emit(0, "Step 3: Initializing snap detection...")
+                self.output_received.emit("Step 3: Running snap detection...")
+                
+                snap_cmd = [
+                    get_python_executable(), get_resource_path("scripts", "snapDetection.py"),
+                    "--player-detections", self.detection_output,
+                    "--output", self.snap_output
+                ]
+                
+                if self.is_cancelled:
+                    return
+                    
+                result = self._run_command(snap_cmd, "Snap Detection", 0, 100)
+                if result:
+                    self.step_completed.emit("Snap Detection", True)
+                else:
+                    self.step_completed.emit("Snap Detection", False)
+                    
+            elif self.current_step == 3:
+                # Step 4: Yard Marker Detection
+                step_name = "Yard Marker Detection"
+                self.output_received.emit(f"Step 4: Checking {step_name}...")
+                
+                # Check if step is already completed
+                if self.check_step_completed(3):
+                    self.output_received.emit(f"✓ {step_name} already completed!")
+                    user_choice = self.ask_user_skip_step(step_name, 3)
+                    
+                    if user_choice == "cancel":
+                        self.processing_failed.emit("Processing cancelled by user")
+                        return
+                    elif user_choice == "skip":
+                        self.output_received.emit(f"Skipping {step_name} - using existing results")
+                        self.step_completed.emit(step_name, True)
+                        return
+                    else:  # rerun
+                        self.output_received.emit(f"Re-running {step_name}...")
+                
+                self.progress_updated.emit(0, "Step 4: Initializing yard marker detection...")
+                self.output_received.emit("Step 4: Running yard marker detection...")
                 
                 
                 yard_marker_cmd = [
@@ -304,15 +347,15 @@ class ProcessingWorker(QThread):
                 else:
                     self.step_completed.emit("Yard Marker Detection", False)
                     
-            elif self.current_step == 3:
-                # Step 4: Auto Correspondence Points
+            elif self.current_step == 4:
+                # Step 5: Auto Correspondence Points
                 step_name = "Correspondence Points Generation"
-                self.output_received.emit(f"Step 4: Checking {step_name}...")
+                self.output_received.emit(f"Step 5: Checking {step_name}...")
                 
                 # Check if step is already completed
-                if self.check_step_completed(3):
+                if self.check_step_completed(4):
                     self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 3)
+                    user_choice = self.ask_user_skip_step(step_name, 4)
                     
                     if user_choice == "cancel":
                         self.processing_failed.emit("Processing cancelled by user")
@@ -328,8 +371,8 @@ class ProcessingWorker(QThread):
                     else:  # rerun
                         self.output_received.emit(f"Re-running {step_name}...")
                 
-                self.progress_updated.emit(0, "Step 4: Initializing correspondence points generation...")
-                self.output_received.emit("Step 4: Generating correspondence points from yard markers...")
+                self.progress_updated.emit(0, "Step 5: Initializing correspondence points generation...")
+                self.output_received.emit("Step 5: Generating correspondence points from yard markers...")
                 
 
                 
@@ -353,15 +396,15 @@ class ProcessingWorker(QThread):
                 else:
                     self.step_completed.emit("Correspondence Points Generation", False)
                     
-            elif self.current_step == 4:
-                # Step 5: Homography Transformation
+            elif self.current_step == 5:
+                # Step 6: Homography Transformation
                 step_name = "Homography Transformation"
-                self.output_received.emit(f"Step 5: Checking {step_name}...")
+                self.output_received.emit(f"Step 6: Checking {step_name}...")
                 
                 # Check if step is already completed
-                if self.check_step_completed(4):
+                if self.check_step_completed(5):
                     self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 4)
+                    user_choice = self.ask_user_skip_step(step_name, 5)
                     
                     if user_choice == "cancel":
                         self.processing_failed.emit("Processing cancelled by user")
@@ -374,16 +417,16 @@ class ProcessingWorker(QThread):
                     else:  # rerun
                         self.output_received.emit(f"Re-running {step_name}...")
                 
-                self.progress_updated.emit(0, "Step 5: Initializing per-frame homography transformation...")
-                self.output_received.emit("Step 5: Running per-frame homography transformation...")
+                self.progress_updated.emit(0, "Step 6: Initializing per-frame homography transformation...")
+                self.output_received.emit("Step 6: Running per-frame homography transformation...")
                 
                 correspondence_file = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
                 
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
                     homography_cmd = [
-                        get_python_executable(), get_resource_path("scripts", "perFrameHomographyTransform.py"),
-                        "--player-detections", self.detection_output,
+                        get_python_executable(), "scripts/perFrameHomographyTransform.py",
+                        "--position-detections", self.position_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
                     ]
@@ -403,10 +446,10 @@ class ProcessingWorker(QThread):
                     self.output_received.emit("No correspondence points found, skipping homography transformation")
                     self.step_completed.emit("Homography Transformation", False)
                     
-            elif self.current_step == 5:
-                # Step 6: Static Process
+            elif self.current_step == 6:
+                # Step 7: Static Process
                 step_name = "Static Process"
-                self.output_received.emit(f"Step 6: Checking {step_name}...")
+                self.output_received.emit(f"Step 7: Checking {step_name}...")
                 
                 # Check prerequisites
                 snap_file = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
@@ -423,9 +466,9 @@ class ProcessingWorker(QThread):
                     return
                 
                 # Check if step is already completed (optional - static process can be re-run)
-                if self.check_step_completed(5):
+                if self.check_step_completed(6):
                     self.output_received.emit(f"✓ {step_name} prerequisites met!")
-                    user_choice = self.ask_user_skip_step(step_name, 5)
+                    user_choice = self.ask_user_skip_step(step_name, 6)
                     
                     if user_choice == "cancel":
                         self.processing_failed.emit("Processing cancelled by user")
@@ -437,8 +480,8 @@ class ProcessingWorker(QThread):
                     else:  # rerun
                         self.output_received.emit(f"Re-running {step_name}...")
                 
-                self.progress_updated.emit(0, "Step 6: Loading snap detection data...")
-                self.output_received.emit("Step 6: Running static process...")
+                self.progress_updated.emit(0, "Step 7: Loading snap detection data...")
+                self.output_received.emit("Step 7: Running static process...")
                 
                 # Load snap detection to get snap frame number
                 try:
@@ -664,7 +707,7 @@ class ProcessingWorker(QThread):
         self.current_frame = 0
         self.frames_processed = 0
         self.bootup_start_time = None
-        if self.current_step <= 5:  # 6 steps: 0, 1, 2, 3, 4, 5
+        if self.current_step <= 6:
             self.start()
     
     def get_progress_info(self):
@@ -696,7 +739,7 @@ class ProcessingWorker(QThread):
                 output_queue.put(f"Error reading output: {str(e)}\n")
             except:
                 pass
-    
+
     def cancel(self):
         """Cancel the processing"""
         self.is_cancelled = True
@@ -714,7 +757,15 @@ class ProcessingDialog(QDialog):
         self.cache_dir = cache_dir
         self.worker = None
         self.current_step = 0
-        self.step_names = ["Player Detection", "Snap Detection", "Yard Marker Detection", "Correspondence Points Generation", "Homography Transformation", "Static Process"]
+        self.step_names = [
+            "Player Detection", 
+            "Position Detection",
+            "Snap Detection", 
+            "Yard Marker Detection", 
+            "Correspondence Points Generation", 
+            "Homography Transformation", 
+            "Static Process"
+        ]
         self.progress_timer = QTimer()
     
         self.setup_ui()

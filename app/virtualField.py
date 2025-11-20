@@ -12,6 +12,20 @@ import sys
 import os
 import json
 
+# Import the color map definition from video.py for color consistency
+try:
+    # Attempt relative import from parent directory structure
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    from video import POSITION_COLORS
+except ImportError:
+    # Define a fallback or generic colors if import fails
+    print("WARNING: Could not import POSITION_COLORS from video.py. Using default colors.")
+    POSITION_COLORS = {
+        'qb': QColor(255, 165, 0),
+        'defense': QColor(0, 0, 255),
+        'player': QColor(0, 255, 0)
+    }
+
 # Add scripts directory to path to import field drawing functions
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 
@@ -133,6 +147,9 @@ class VirtualFieldWidget(QWidget):
                     x = normalized_pos.get('x', 0)
                     y = normalized_pos.get('y', 0)
                     
+                    # Get object label (e.g., 'qb', 'defense')
+                    object_label = player.get('object_label', 'player').lower()
+                    
                     # Convert field coordinates to widget coordinates
                     # Field is 100 yards long and 53.33 yards wide
                     # (0,0) is bottom left corner of the field
@@ -158,14 +175,19 @@ class VirtualFieldWidget(QWidget):
                     field_bottom = field_y_offset + field_height
                     
                     if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
+                        # Get color from the map, using 'player' as default fallback
+                        dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
+                        
                         # Draw player dot - make it more visible
-                        painter.setBrush(QBrush(QColor(255, 0, 0)))  # Red dot
+                        painter.setBrush(QBrush(dot_color))  
                         painter.setPen(QPen(QColor(255, 255, 255), 3))  # Thicker white border
                         painter.drawEllipse(widget_x - 8, widget_y - 8, 16, 16)  # Larger dot
                         
-                        # Debug: Draw a small text label
+                        # Draw object label text (Position Class)
                         painter.setPen(QPen(QColor(255, 255, 255)))
-                        painter.drawText(widget_x + 10, widget_y, f"({x:.1f},{y:.1f})")
+                        # Move text slightly below the center of the dot
+                        # painter.drawText(widget_x - 7, widget_y + 5, object_label.upper()) 
+
              
         
         # Draw frame number
@@ -246,9 +268,6 @@ def draw_yard_marker_dots(ax, correspondence_points=None):
         return
     
     # Field dimensions (in yards for plotting)
-    FIELD_LENGTH = 120.0  # 120 yards
-    FIELD_WIDTH = 160.0 / 3.0  # ~53.33 yards
-    
     for point in correspondence_points:
         field_coords = point.get('field_point', {})
         marker_info = point.get('yard_marker_info', {})

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Per-Frame Homography Transformation Script
-Transforms player detections using frame-specific correspondence points
+Transforms player position detections using frame-specific correspondence points
 """
 
 import argparse
@@ -67,23 +67,23 @@ def transform_point(point_px, H):
         return (x_field, y_field)
     return None
 
-def process_per_frame_homography(player_detections_path, correspondence_points_path, output_path):
+def process_per_frame_homography(position_detections_path, correspondence_points_path, output_path):
     """
-    Process player detections and correspondence points per frame to generate normalized positions.
+    Process player positions detections and correspondence points per frame to generate normalized positions.
     Args:
-        player_detections_path (str): Path to player detections JSON file.
+        position_detections_path (str): Path to position detections JSON file.
         correspondence_points_path (str): Path to correspondence points JSON file.
         output_path (str): Path to save the output normalized positions JSON file.
     """
-    print(f"Loading player detections from: {player_detections_path}")
-    player_data = load_json_data(player_detections_path)
+    print(f"Loading position detections from: {position_detections_path}")
+    position_data = load_json_data(position_detections_path)
     
     print(f"Loading correspondence points from: {correspondence_points_path}")
     correspondence_data = load_json_data(correspondence_points_path)
 
-    total_frames = player_data.get('total_frames', 0)
+    total_frames = position_data.get('total_frames', 0)
     if not total_frames:
-        total_frames = len(player_data.get('frames', []))
+        total_frames = len(position_data.get('frames', []))
     
     frame_correspondences = correspondence_data.get('frame_correspondences', {})
     
@@ -98,9 +98,9 @@ def process_per_frame_homography(player_detections_path, correspondence_points_p
     
     print(f"Processing {total_frames} frames for per-frame homography transformation...")
 
-    for i, frame_data in enumerate(player_data.get('frames', [])):
+    for i, frame_data in enumerate(position_data.get('frames', [])):
         frame_number = frame_data.get('frame_number', i)
-        player_detections = frame_data.get('detections', [])
+        position_detections = frame_data.get('detections', [])
         
         current_frame_correspondences = frame_correspondences.get(str(frame_number), [])
         
@@ -132,28 +132,28 @@ def process_per_frame_homography(player_detections_path, correspondence_points_p
         
         frames_with_sufficient_markers += 1
         
-        # Transform player detections
-        transformed_players = []
-        for player_det in player_detections:
-            bbox = player_det.get('bbox', {})
+        # Transform position detections
+        transformed_positions = []
+        for position_det in position_detections:
+            bbox = position_det.get('bbox', {})
             if 'center_x' in bbox and 'center_y' in bbox:
                 player_pixel_point = (bbox['center_x'], bbox['center_y'])
                 normalized_pos = transform_point(player_pixel_point, H)
                 
                 if normalized_pos:
-                    transformed_players.append({
+                    transformed_positions.append({
                         "frame_number": frame_number,
-                        "object_label": player_det.get('class', 'player'),
+                        "object_label": position_det.get('class'),
                         "normalized_position": {"x": normalized_pos[0], "y": normalized_pos[1]},
                         "original_bbox": bbox,
-                        "confidence": player_det.get('confidence', 0.0)
+                        "confidence": position_det.get('confidence', 0.0)
                     })
         
-        normalized_positions_output['normalized_positions'][str(frame_number)] = transformed_players
+        normalized_positions_output['normalized_positions'][str(frame_number)] = transformed_positions
         
         if i % 50 == 0:
             progress = (i + 1) / total_frames * 100
-            print(f"Progress: {progress:.1f}% - Frame {frame_number}: Processed {len(transformed_players)} players")
+            print(f"Progress: {progress:.1f}% - Frame {frame_number}: Processed {len(transformed_positions)} players")
 
     normalized_positions_output['frames_processed'] = total_frames
     normalized_positions_output['frames_with_sufficient_markers'] = frames_with_sufficient_markers
@@ -164,8 +164,8 @@ def process_per_frame_homography(player_detections_path, correspondence_points_p
 
 def main():
     parser = argparse.ArgumentParser(description='Perform per-frame homography transformation')
-    parser.add_argument('--player-detections', required=True,
-                        help='Path to player detections JSON file')
+    parser.add_argument('--position-detections', required=True,
+                        help='Path to position detections JSON file')
     parser.add_argument('--correspondence-points', required=True,
                         help='Path to per-frame correspondence points JSON file')
     parser.add_argument('--output', required=True,
@@ -173,7 +173,7 @@ def main():
     
     args = parser.parse_args()
     
-    process_per_frame_homography(args.player_detections, args.correspondence_points, args.output)
+    process_per_frame_homography(args.position_detections, args.correspondence_points, args.output)
 
 if __name__ == "__main__":
     sys.exit(main())
