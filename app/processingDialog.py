@@ -843,7 +843,7 @@ class ProcessingDialog(QDialog):
         button_layout.addStretch()
         
         self.next_button = QPushButton("Next Step")
-        self.next_button.setFixedSize(100, 30)
+        self.next_button.setFixedHeight(30)
         self.next_button.setStyleSheet("""
             QPushButton {
                 background-color: #0078d4;
@@ -851,6 +851,7 @@ class ProcessingDialog(QDialog):
                 color: white;
                 border-radius: 4px;
                 font-weight: bold;
+                padding: 5px 15px; 
             }
             QPushButton:hover {
                 background-color: #106ebe;

@@ -34,7 +34,7 @@ Install Git LFS before cloning or immediately after, then run `git lfs install` 
   git lfs install
   ```
 
-Once installed and you have hooked git lfs in the repo (git lfs install in the root dir), pull the tracked artifacts (if contents of files in yolo_models are txt files):
+Once installed and you have hooked git lfs in the repo (git lfs install in the root dir), pull the tracked artifacts (if contents of files in yolo_models are not binary files):
 ```bash
 git lfs pull
 ```
