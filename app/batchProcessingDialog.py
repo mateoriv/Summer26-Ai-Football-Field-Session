@@ -6,7 +6,7 @@ Modal dialog for batch processing multiple videos with progress tracking
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, 
-    QTextEdit, QPushButton, QFrame, QWidget, QFileDialog, QListWidget, QListWidgetItem, QSpinBox
+    QTextEdit, QPushButton, QFrame, QWidget, QFileDialog, QListWidget, QListWidgetItem, QSpinBox, QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QTextCursor
@@ -62,6 +62,47 @@ class ProcessingCancelled(Exception):
     """Raised when batch processing is cancelled by the user."""
     pass
 
+def is_video_processed(video_path, video_folder, output_dir="cache"):
+    """Check if a video has already been fully processed.
+    
+    A video is considered processed if all required files exist:
+    - correspondence/{video_name}_correspondence.json
+    - homography/{video_name}_normalized_positions.json
+    - players/{video_name}_detection.json
+    - snap_detection/{video_name}_snap_detection.json
+    - yard_markers/{video_name}_yard_markers.json
+    """
+    try:
+        video_name = Path(video_path).stem
+        
+        if not os.path.isabs(output_dir):
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            output_dir = os.path.join(project_root, output_dir)
+        else:
+            output_dir = os.path.abspath(output_dir)
+        
+        if video_folder:
+            video_folder = os.path.basename(video_folder.rstrip("/\\"))
+        else:
+            video_folder = Path(video_path).parent.name
+        
+        base_dir = os.path.join(output_dir, video_folder)
+        
+        # Check for all required files
+        required_files = [
+            os.path.join(base_dir, "correspondence", f"{video_name}_correspondence.json"),
+            os.path.join(base_dir, "homography", f"{video_name}_normalized_positions.json"),
+            os.path.join(base_dir, "players", f"{video_name}_detection.json"),
+            os.path.join(base_dir, "snap_detection", f"{video_name}_snap_detection.json"),
+            os.path.join(base_dir, "yard_markers", f"{video_name}_yard_markers.json"),
+        ]
+        
+        # All files must exist for video to be considered processed
+        return all(os.path.exists(f) for f in required_files)
+    except Exception as e:
+        print(f"Error checking if video is processed: {e}")
+        return False
+
 
 def process_single_video_standalone(video_path, video_folder, output_dir="cache"):
     """Standalone function kept for future multi-processing support."""
@@ -99,8 +140,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             os.path.join(base_dir, "yard_markers"),
             os.path.join(base_dir, "correspondence"),
             os.path.join(base_dir, "homography"),
-            os.path.join(base_dir, "virtual_field"),
-            os.path.join(base_dir, "results"),
+          
         ]
         for directory in directories:
             os.makedirs(directory, exist_ok=True)
@@ -414,6 +454,7 @@ class BatchProcessingDialog(QDialog):
         self.worker = None
         self.video_paths = []
         self.parent_window = parent
+        self.skipped_videos_count = 0
         self.setup_ui()
         self.load_current_folder()
     
@@ -545,6 +586,35 @@ class BatchProcessingDialog(QDialog):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
+        # Skip processed checkbox (placed close to buttons)
+        self.skip_processed_checkbox = QCheckBox("Skip processed videos")
+        self.skip_processed_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #000000;
+                font-size: 11px;
+                spacing: 5px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #555555;
+                border-radius: 3px;
+                background-color: #2b2b2b;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0078d4;
+                border-color: #0078d4;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #0078d4;
+            }
+        """)
+        self.skip_processed_checkbox.setToolTip("Skip videos that have already been fully processed")
+        button_layout.addWidget(self.skip_processed_checkbox)
+        
+        # Add small spacing between checkbox and buttons
+        button_layout.addSpacing(10)
+        
         self.start_button = QPushButton("Start Processing")
         self.start_button.setFixedSize(140, 30)
         self.start_button.setStyleSheet("""
@@ -651,10 +721,52 @@ class BatchProcessingDialog(QDialog):
         if not self.video_paths:
             return
         
+        # Filter out already processed videos if checkbox is checked
+        videos_to_process = self.video_paths.copy()
+        skipped_count = 0
+        
+        if self.skip_processed_checkbox.isChecked():
+            processed_videos = []
+            unprocessed_videos = []
+            
+            # Get video folder from parent window
+            video_folder = self.parent_window.current_folder if hasattr(self.parent_window, 'current_folder') else None
+            
+            for video_path in self.video_paths:
+                if is_video_processed(video_path, video_folder):
+                    processed_videos.append(video_path)
+                    skipped_count += 1
+                else:
+                    unprocessed_videos.append(video_path)
+            
+            videos_to_process = unprocessed_videos
+            
+            if skipped_count > 0:
+                self.add_output(f"Skipping {skipped_count} already processed video(s):")
+                for video_path in processed_videos:
+                    video_name = Path(video_path).stem
+                    self.add_output(f"  - {video_name}")
+                self.add_output("")
+        
+        if not videos_to_process:
+            self.status_label.setText("All videos have already been processed!")
+            self.add_output("All videos have already been processed. Nothing to do.")
+            self.start_button.setEnabled(True)
+            return
+        
+        # Store skipped count for later display
+        self.skipped_videos_count = skipped_count
+        
+        # Update status to show how many videos will be processed
+        if skipped_count > 0:
+            self.status_label.setText(f"Processing {len(videos_to_process)} videos ({skipped_count} skipped)")
+        else:
+            self.status_label.setText(f"Processing {len(videos_to_process)} videos")
+        
         # Get the number of parallel workers from the spinbox
         max_workers = 15
         
-        self.worker = BatchProcessingWorker(self.video_paths, max_workers=max_workers)
+        self.worker = BatchProcessingWorker(videos_to_process, max_workers=max_workers)
         
         # Connect signals
         self.worker.progress_updated.connect(self.update_progress)
@@ -695,13 +807,50 @@ class BatchProcessingDialog(QDialog):
         
         # Show results
         self.add_output(f"\nBatch processing completed!")
+        if self.skipped_videos_count > 0:
+            self.add_output(f"Skipped (already processed): {self.skipped_videos_count} videos")
         self.add_output(f"Successfully processed: {results['completed_videos']}/{results['total_videos']} videos")
         self.add_output(f"Failed: {results['failed_videos']}/{results['total_videos']} videos")
+        
+        # Reload data sheet CSV
+        self.reload_data_sheet_csv()
         
         # Show close button and hide other buttons
         self.cancel_button.setVisible(False)
         self.start_button.setVisible(False)
         self.close_button.setVisible(True)
+    
+    def reload_data_sheet_csv(self):
+        """Reload the data sheet CSV after batch processing"""
+        if not self.parent_window:
+            return
+        
+        try:
+            # Try to reload from current CSV path first
+            if hasattr(self.parent_window, 'current_csv_path') and self.parent_window.current_csv_path:
+                if os.path.exists(self.parent_window.current_csv_path):
+                    self.add_output(f"\nReloading data sheet: {self.parent_window.current_csv_path}")
+                    if hasattr(self.parent_window, 'load_csv_file'):
+                        self.parent_window.load_csv_file(self.parent_window.current_csv_path)
+                        self.add_output("Data sheet reloaded successfully")
+                        return
+            
+            # Try to find CSV in cache directory based on current folder
+            if hasattr(self.parent_window, 'current_folder') and self.parent_window.current_folder:
+                folder_name = os.path.basename(self.parent_window.current_folder.rstrip('/\\'))
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(app_dir)
+                csv_path = os.path.join(project_root, "cache", folder_name, f"{folder_name}_data.csv")
+                
+                if os.path.exists(csv_path) and hasattr(self.parent_window, 'load_csv_file'):
+                    self.add_output(f"\nReloading data sheet from cache: {csv_path}")
+                    self.parent_window.load_csv_file(csv_path)
+                    self.add_output("Data sheet reloaded successfully")
+                else:
+                    self.add_output(f"\nNote: CSV file not found at {csv_path}")
+        except Exception as e:
+            self.add_output(f"\nWarning: Could not reload data sheet: {str(e)}")
+            print(f"Error reloading data sheet after batch processing: {e}")
     
     def batch_failed(self, error_message):
         """Handle batch processing failure"""
