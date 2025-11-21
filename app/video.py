@@ -20,6 +20,8 @@ POSITION_COLORS = {
     'player': QColor(128, 128, 128),        # Gray (Generic Player Fallback)
     'yard_marker': QColor(0, 255, 127)      # Spring Green (Yard Marker)
 }
+YARD_MARKERS = ["f5", "fl1", "fl2", "fl3", "fl4", "fr1", "fr2", "fr3", "fr4", "n5", "nl1", "nl2", "nl3", "nl4", "nr1", "nr2", "nr3", "nr4"]
+    
 
 
 class SnapMarkerSlider(QWidget):
@@ -302,33 +304,37 @@ class CustomVideoWidget(QWidget):
         
         # Define colors based on class name using the mapping
         class_name = detection.get('class', 'player')
+        if class_name in YARD_MARKERS:
+            class_name = "yard_marker"
         box_color = POSITION_COLORS.get(class_name.lower(), POSITION_COLORS['player'])
-        
+       
         # Draw bounding box
         painter.setPen(QPen(box_color, 3))
         # Use a semi-transparent brush
         painter.setBrush(QBrush(QColor(box_color.red(), box_color.green(), box_color.blue(), 50))) 
         painter.drawRect(scaled_x, scaled_y, scaled_w, scaled_h)
         
-        # # Draw label
-        # confidence = detection.get('confidence', 0.0)
-        
-        # # Use contrasting text color (e.g., black or white based on background)
-        # # Using white text for general visibility against darker video content
-        # painter.setPen(QPen(QColor(255, 255, 255), 1))
-        
-        # # Draw a semi-transparent background rectangle for the text label
-        # text_label = f"{class_name} {confidence:.2f}"
-        # font_metrics = painter.fontMetrics()
-        # text_width = font_metrics.horizontalAdvance(text_label)
-        # text_height = font_metrics.height()
-        
-        # # Draw background rectangle for the text
-        # text_bg_rect = QRectF(scaled_x, scaled_y - text_height - 5, text_width + 6, text_height + 2)
-        # painter.fillRect(text_bg_rect, QBrush(QColor(0, 0, 0, 150))) # Dark semi-transparent background
-        
-        # # Draw the text on top
-        # painter.drawText(scaled_x + 3, scaled_y - 8, text_label)
+        # # Draw label if yard marker
+        if class_name == "yard_marker":
+            class_name = detection.get('class', 'player')
+            confidence = detection.get('confidence', 0.0)
+            
+            # Use contrasting text color (e.g., black or white based on background)
+            # Using white text for general visibility against darker video content
+            painter.setPen(QPen(QColor(255, 255, 255), 1))
+            
+            # Draw a semi-transparent background rectangle for the text label
+            text_label = f"{class_name} {confidence:.2f}"
+            font_metrics = painter.fontMetrics()
+            text_width = font_metrics.horizontalAdvance(text_label)
+            text_height = font_metrics.height()
+            
+            # Draw background rectangle for the text
+            text_bg_rect = QRectF(scaled_x, scaled_y - text_height - 5, text_width + 6, text_height + 2)
+            painter.fillRect(text_bg_rect, QBrush(QColor(0, 0, 0, 150))) # Dark semi-transparent background
+            
+            # Draw the text on top
+            painter.drawText(scaled_x + 3, scaled_y - 8, text_label)
         
     def force_update(self):
         self.update()
