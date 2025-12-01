@@ -16,7 +16,7 @@ from virtualField import create_virtual_field_dock
 from palette import get_light_palette, get_dark_palette
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, dark_mode=False):
         super().__init__()
 
         self.setWindowTitle("Hudl AI Analysis")
@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
 
         # --- Menu Bar ---
         menu_bar = self.menuBar()
+        self.set_menu_colors(dark_mode)
 
         # File Menu
         file_menu = menu_bar.addMenu("File")
@@ -93,10 +94,10 @@ class MainWindow(QMainWindow):
         self.load_settings()
 
         # Add ability to change palette theme
-        window_menu = menu_bar.addMenu("Theme")
-        window_menu.addAction("Light", lambda: app.setPalette(get_light_palette()))
-        window_menu.addAction("Dark", lambda: app.setPalette(get_dark_palette()))
-        window_menu.addAction("System", lambda: apply_system_theme(app))
+        theme_menu = menu_bar.addMenu("Theme")
+        theme_menu.addAction("Light", lambda: self.apply_palette(get_light_palette(), False))
+        theme_menu.addAction("Dark", lambda: self.apply_palette(get_dark_palette(), True))
+        theme_menu.addAction("System", self.apply_system_palette)
 
 
     def open_folder(self):
@@ -140,6 +141,27 @@ class MainWindow(QMainWindow):
         self.resizeDocks([self.video_dock, self.data_dock, self.file_dock, self.virtual_dock], 
                         [half_height, half_height, half_height, half_height], Qt.Vertical)
     
+    def apply_palette(self, palette, dark_mode):
+        """Apply palette and sync menu bar colors."""
+        QApplication.instance().setPalette(palette)
+        self.set_menu_colors(dark_mode)
+
+    def apply_system_palette(self):
+        """Follow OS theme and sync menu bar colors."""
+        is_dark = darkdetect.isDark()
+        palette = get_dark_palette() if is_dark else get_light_palette()
+        self.apply_palette(palette, is_dark)
+
+    def set_menu_colors(self, dark_mode):
+        """Ensure menu bar titles contrast with current theme."""
+        text_color = "white" if dark_mode else "black"
+        self.menuBar().setStyleSheet(
+            f"QMenuBar {{ color: {text_color}; }}\n"
+            f"QMenuBar::item {{ color: {text_color}; }}\n"
+            "QMenu { color: black; }\n"
+            "QMenu::item:selected { background-color: #dcdcdc; }\n"
+        )
+
     def load_settings(self):
         """Load application settings from file"""
         try:
@@ -191,8 +213,10 @@ class MainWindow(QMainWindow):
 def apply_system_theme(app):
     if darkdetect.isDark():
         app.setPalette(get_dark_palette())
+        return True
     else:
         app.setPalette(get_light_palette())
+        return False
 
 
 if __name__ == "__main__":
@@ -204,8 +228,8 @@ if __name__ == "__main__":
     # Remove Fusion style to allow native dialogs
     #app.setStyle(QStyleFactory.create("windows11"))
     
-    apply_system_theme(app)
-    window = MainWindow()
+    system_dark = apply_system_theme(app)
+    window = MainWindow(system_dark)
     window.show()
     
     # Set equal dock sizes after window is shown
