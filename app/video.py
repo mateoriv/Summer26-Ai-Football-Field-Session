@@ -2,8 +2,9 @@ from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QSlider, QLabel, QSizePolicy, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem)
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtCore import Qt, QTime, QTimer, QRectF
+from PySide6.QtCore import Qt, QTime, QTimer, QRectF, QObject, QEvent
 from PySide6.QtGui import QPainter, QPen, QFont, QColor, QBrush, QImage, QPixmap
+
 import json
 import os
 import cv2
@@ -128,6 +129,7 @@ class CustomVideoWidget(QWidget):
         # Timer for frame updates (~30 FPS playback)
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
+
         
     def set_detection_data(self, data):
         """
@@ -807,6 +809,35 @@ def create_video_title_bar(dock):
     yard_marker_checkbox.clicked.connect(lambda: toggle_bounding_boxes(dock.parent(), yard_marker_checkbox))
     layout.addWidget(yard_marker_checkbox)
     
+    # Legend toggle button
+    legend_checkbox = QPushButton("Legend")
+    legend_checkbox.setFixedSize(50, 20)
+    legend_checkbox.setCheckable(True)
+    legend_checkbox.setChecked(False)
+    legend_checkbox.setToolTip("Toggle Color to Position Legend ")
+    legend_checkbox.setStyleSheet("""
+        QPushButton {
+            background-color: transparent;
+            border: none;
+            color: white;
+            padding: 4px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: #404040;
+        }
+        QPushButton:pressed {
+            background-color: #505050;
+        }
+        QPushButton:checked {
+            background-color: #8A2BE2;
+        }
+    """)
+    legend_checkbox.clicked.connect(lambda: toggle_legend(dock.parent(), legend_checkbox))
+    layout.addWidget(legend_checkbox)
+
+
     # Close button (X)
     close_btn = QPushButton("✕")
     close_btn.setFixedSize(20, 20)
@@ -1137,6 +1168,93 @@ def toggle_bounding_boxes(parent, button):
 def toggle_yard_marker_boxes(parent, button):
     """Toggle yard marker bounding box visibility - wrapper for unified function"""
     toggle_bounding_boxes(parent, button, "yard_markers")
+
+def toggle_legend(parent, button=None):
+    """ Shows a legend that tells user relationship beteween readable positions and their colors"""
+
+    # If legend exists and this function was called, time to close and delete it
+    if hasattr(parent, "legend_widget") and parent.legend_widget is not None:
+        if parent.legend_widget.isVisible():
+            parent.legend_widget.close()
+            parent.legend_widget.deleteLater()
+            parent.legend_widget = None
+            if button:
+                button.setChecked(False)
+            return
+
+    # Otherwise build the legend
+    legend = QWidget(parent)
+    parent.legend_widget = legend
+
+    # Make legend frameless + movable + not in taskbar
+    legend.setWindowFlags(
+        Qt.Tool
+        | Qt.FramelessWindowHint
+        | Qt.WindowStaysOnTopHint
+    )
+
+    # Add manual dragging
+    def mousePressEvent(event):
+        legend.drag_pos = event.globalPos() - legend.frameGeometry().topLeft()
+        event.accept()
+
+    def mouseMoveEvent(event):
+        if event.buttons() & Qt.LeftButton:
+            legend.move(event.globalPos() - legend.drag_pos)
+            event.accept()
+
+    legend.mousePressEvent = mousePressEvent
+    legend.mouseMoveEvent = mouseMoveEvent
+
+    # Make sure matches theme
+    is_dark = getattr(parent, "is_dark", True)
+    legend_bg = "#222" if is_dark else "#ffffff"
+    legend_text = "white" if is_dark else "black"
+
+    legend.setStyleSheet(
+        f"""
+        QWidget {{
+            background-color: {legend_bg};
+            color: {legend_text};
+            border: none;
+            border-radius: 6px;
+        }}
+        QLabel {{
+            color: {legend_text};
+        }}
+        """
+    )
+
+    # Layout
+    layout = QVBoxLayout(legend)
+    layout.setContentsMargins(10, 10, 10, 10)
+
+    # Populate items
+    for pos, color in POSITION_COLORS.items():
+        row = QHBoxLayout()
+
+        color_box = QLabel()
+        color_box.setFixedSize(20, 20)
+        color_box.setStyleSheet(
+            f"""
+            background-color: rgba({color.red()}, {color.green()}, {color.blue()}, 255);
+            border: 1px solid {'white' if is_dark else 'black'};
+            """
+        )
+
+        text_label = QLabel(pos)
+        text_label.setStyleSheet("font-size: 14px; padding-left: 6px;")
+
+        row.addWidget(color_box)
+        row.addWidget(text_label)
+        row.addStretch()
+        layout.addLayout(row)
+
+    legend.adjustSize()
+    legend.show()
+
+    parent.position_legend()
+
 
 def load_and_set_detection_data(parent, data_type):
     """
