@@ -15,20 +15,65 @@ import os
 import sys
 import json
 import time
+import logging
 from pathlib import Path
+from datetime import datetime
 import glob
 import threading
 import multiprocessing
 
+# Set up logging for batch processing
+def setup_batch_logging():
+    """Set up logging for batch processing operations"""
+    log_dir = Path.home() / ".hudl_ai_logs"
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / f"batch_processing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    
+    # Create logger for batch processing
+    logger = logging.getLogger('batch_processing')
+    logger.setLevel(logging.DEBUG)
+    
+    # Avoid adding handlers multiple times
+    if not logger.handlers:
+        # File handler
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+        
+        # Console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter('%(levelname)s - %(message)s')
+        console_handler.setFormatter(console_formatter)
+        logger.addHandler(console_handler)
+    
+    return logger, log_file
+
+# Initialize logger
+_batch_logger, _batch_log_file = setup_batch_logging()
+
 def get_project_root():
     """Return project root, handling PyInstaller one-file extractions."""
-    if hasattr(sys, "_MEIPASS"):
-        return sys._MEIPASS
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Import here to avoid circular imports
+    from fileAccess import get_project_root as get_root
+    return get_root()
 
+def get_cache_dir():
+    """Get the cache directory path."""
+    # Import here to avoid circular imports
+    from fileAccess import get_cache_dir as get_cache
+    return get_cache()
 
 def get_resource_path(*parts):
-    return os.path.join(get_project_root(), *parts)
+    """Build an absolute path rooted at the project directory or _MEIPASS when compiled."""
+    if hasattr(sys, "_MEIPASS"):
+        # Running as compiled executable - resources are in _MEIPASS
+        return os.path.join(sys._MEIPASS, *parts)
+    else:
+        # Running in development mode
+        return os.path.join(get_project_root(), *parts)
 
 
 def get_python_executable():
@@ -76,8 +121,8 @@ def is_video_processed(video_path, video_folder, output_dir="cache"):
         video_name = Path(video_path).stem
         
         if not os.path.isabs(output_dir):
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            output_dir = os.path.join(project_root, output_dir)
+            # Use persistent cache directory instead of temp PyInstaller folder
+            output_dir = get_cache_dir()
         else:
             output_dir = os.path.abspath(output_dir)
         
@@ -100,7 +145,7 @@ def is_video_processed(video_path, video_folder, output_dir="cache"):
         # All files must exist for video to be considered processed
         return all(os.path.exists(f) for f in required_files)
     except Exception as e:
-        print(f"Error checking if video is processed: {e}")
+        _batch_logger.error(f"Error checking if video is processed: {e}", exc_info=True)
         return False
 
 
@@ -121,9 +166,11 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
     
     try:
         video_name = Path(video_path).stem
+        _batch_logger.info(f"Starting processing for video: {video_name} (path: {video_path})")
         
         if not os.path.isabs(output_dir):
-            output_dir = os.path.join(get_project_root(), output_dir)
+            # Use persistent cache directory instead of temp PyInstaller folder
+            output_dir = get_cache_dir()
         else:
             output_dir = os.path.abspath(output_dir)
         
@@ -146,10 +193,16 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             os.makedirs(directory, exist_ok=True)
         
         detection_output = os.path.join(base_dir, "players", f"{video_name}_detection.json")
+        position_output = os.path.join(base_dir, "positions", f"{video_name}_position.json")
         snap_output = os.path.join(base_dir, "snap_detection", f"{video_name}_snap_detection.json")
         yard_marker_output = os.path.join(base_dir, "yard_markers", f"{video_name}_yard_markers.json")
         correspondence_output = os.path.join(base_dir, "correspondence", f"{video_name}_correspondence.json")
         homography_output = os.path.join(base_dir, "homography", f"{video_name}_normalized_positions.json")
+        
+        print(f"Snap output: {snap_output}")
+        print(f"Yard marker output: {yard_marker_output}")
+        print(f"Correspondence output: {correspondence_output}")
+        print(f"Homography output: {homography_output}")
         
         steps = [
             {
@@ -158,6 +211,14 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
                     get_python_executable(), get_resource_path("scripts", "playerDetection.py"),
                     "--video", video_path,
                     "--output", detection_output
+                ]
+            },
+            {
+                "name": "Position Detection",
+                "cmd": [
+                    get_python_executable(), get_resource_path("scripts", "positionDetection.py"),
+                    "--video", video_path,
+                    "--output", position_output
                 ]
             },
             {
@@ -190,11 +251,11 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
                 "name": "Homography Transformation",
                 "cmd": [
                     get_python_executable(), get_resource_path("scripts", "perFrameHomographyTransform.py"),
-                    "--player-detections", detection_output,
+                    "--position-detections", detection_output,
                     "--correspondence-points", correspondence_output,
                     "--output", homography_output
                 ],
-                "prereq": correspondence_output
+                "prereq": [correspondence_output, detection_output]
             },
             {
                 "name": "Static Process",
@@ -209,11 +270,13 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
         ]
         
         emit_output(f"Starting processing for {video_name}")
+        _batch_logger.debug(f"Processing {video_name}: Output directory: {output_dir}, Video folder: {video_folder}")
         for step in steps:
             if cancel_check and cancel_check():
                 raise ProcessingCancelled("Processing cancelled before step start")
             
             step_name = step["name"]
+            _batch_logger.info(f"Processing {video_name}: Starting step '{step_name}'")
             emit_status(f"{step_name} in progress")
             
             prereq = step.get("prereq")
@@ -225,6 +288,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
                     if not os.path.exists(prereq):
                         missing = [prereq]
                 if missing:
+                    _batch_logger.warning(f"Processing {video_name}: Missing prerequisites for {step_name}: {missing}")
                     emit_output(f"Missing prerequisites for {step_name}: {missing}")
                     return False
             
@@ -236,24 +300,36 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             )
             
             if not success:
+                _batch_logger.error(f"Processing {video_name}: Step '{step_name}' failed")
                 emit_output(f"{step_name} failed for {video_name}")
                 return False
             
+            _batch_logger.info(f"Processing {video_name}: Step '{step_name}' completed successfully")
             emit_output(f"✓ {step_name} completed for {video_name}")
         
+        _batch_logger.info(f"Processing {video_name}: All steps completed successfully")
         emit_output(f"All steps completed for {video_name}")
         return True
     
     except ProcessingCancelled:
+        _batch_logger.warning(f"Processing cancelled for video: {video_path}")
         raise
     except Exception as e:
+        _batch_logger.error(f"Error processing video {video_path}: {str(e)}", exc_info=True)
         emit_output(f"Error processing {video_path}: {str(e)}")
         return False
 
 def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=None):
     """Run a command and stream output, optionally supporting cancellation."""
-    project_root = get_project_root()
+    # Get working directory (use _MEIPASS when compiled)
+    if hasattr(sys, "_MEIPASS"):
+        working_dir = sys._MEIPASS
+    else:
+        working_dir = get_project_root()
     emit_output = output_callback or (lambda msg: print(msg, flush=True))
+    
+    _batch_logger.debug(f"Running command for '{step_name}': {' '.join(cmd)}")
+    _batch_logger.debug(f"Working directory: {working_dir}")
     
     try:
         env = os.environ.copy()
@@ -262,11 +338,11 @@ def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=N
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             universal_newlines=True,
-            cwd=project_root,
+            cwd=working_dir,
             env=env
         )
         
@@ -288,14 +364,18 @@ def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=N
         return_code = process.wait()
         
         if return_code == 0:
+            _batch_logger.debug(f"Command for '{step_name}' completed successfully (return code: 0)")
             return True
         
+        _batch_logger.warning(f"Command for '{step_name}' failed with return code {return_code}")
         emit_output(f"{step_name} failed with return code {return_code}")
         return False
     
     except ProcessingCancelled:
+        _batch_logger.warning(f"Command for '{step_name}' was cancelled")
         raise
     except Exception as e:
+        _batch_logger.error(f"Exception running command for '{step_name}': {str(e)}", exc_info=True)
         emit_output(f"Error running {step_name}: {str(e)}")
         return False
 
@@ -311,9 +391,9 @@ class BatchProcessingWorker(QThread):
     def __init__(self, video_paths, output_dir="cache", max_workers=2):
         super().__init__()
         self.video_paths = video_paths
-        # If output_dir is relative, make it relative to project root, not app directory
+        # Use persistent cache directory instead of temp PyInstaller folder
         if not os.path.isabs(output_dir):
-            self.output_dir = os.path.join(get_project_root(), output_dir)
+            self.output_dir = get_cache_dir()
         else:
             self.output_dir = os.path.abspath(output_dir)
         self.max_workers = max_workers
@@ -330,7 +410,7 @@ class BatchProcessingWorker(QThread):
         if not self.is_cancelled:
             self.is_cancelled = True
             self.output_received.emit("Cancelling batch processing...")
-            print("Batch processing worker cancelled")
+            _batch_logger.info("Batch processing worker cancelled by user")
     
     def is_cancelled_check(self):
         """Check if processing should be cancelled"""
@@ -339,11 +419,13 @@ class BatchProcessingWorker(QThread):
     def run(self):
         """Run batch processing sequentially (infrastructure ready for future parallelism)."""
         try:
+            _batch_logger.info(f"Starting batch processing: {self.total_videos} videos, output_dir: {self.output_dir}")
             self.output_received.emit(f"Starting batch processing of {self.total_videos} videos")
             self.output_received.emit("Running in sequential mode (multi-worker ready)")
             self.output_received.emit("-" * 50)
             
             if self.total_videos == 0:
+                _batch_logger.warning("Batch processing started with no videos to process")
                 self.progress_updated.emit(100, "No videos to process")
                 final_results = {
                     "total_videos": 0,
@@ -365,6 +447,7 @@ class BatchProcessingWorker(QThread):
                 video_folder = os.path.basename(os.path.dirname(video_path)) or ""
                 clip_label = f"[Clip {index}/{self.total_videos}] {video_name}"
                 
+                _batch_logger.info(f"Processing video {index}/{self.total_videos}: {video_name} (path: {video_path})")
                 self.output_received.emit(f"{clip_label} - starting")
                 
                 def clip_output(message, prefix=clip_label):
@@ -386,20 +469,24 @@ class BatchProcessingWorker(QThread):
                         cancel_check=self.is_cancelled_check
                     )
                 except ProcessingCancelled:
+                    _batch_logger.warning(f"Batch processing cancelled by user at video {index}/{self.total_videos}: {video_name}")
                     self.output_received.emit("Batch processing cancelled by user")
                     self.batch_cancelled.emit()
                     return
                 except Exception as e:
+                    _batch_logger.error(f"Unexpected error processing video {video_name}: {str(e)}", exc_info=True)
                     clip_output(f"Unexpected error: {e}")
                     success = False
                 
                 with self.lock:
                     if success:
                         self.completed_videos += 1
+                        _batch_logger.info(f"Video {index}/{self.total_videos} completed successfully: {video_name}")
                         self.video_completed.emit(video_name, True)
                         clip_output("Completed successfully")
                     else:
                         self.failed_videos += 1
+                        _batch_logger.warning(f"Video {index}/{self.total_videos} failed: {video_name}")
                         self.video_completed.emit(video_name, False)
                         clip_output("Failed")
                     
@@ -422,6 +509,8 @@ class BatchProcessingWorker(QThread):
             self.output_received.emit(f"Successfully processed: {self.completed_videos}/{self.total_videos} videos")
             self.output_received.emit(f"Failed: {self.failed_videos}/{self.total_videos} videos")
             
+            _batch_logger.info(f"Batch processing completed: {self.completed_videos} succeeded, {self.failed_videos} failed out of {self.total_videos} total")
+            
             final_results = {
                 "total_videos": self.total_videos,
                 "completed_videos": self.completed_videos,
@@ -431,17 +520,23 @@ class BatchProcessingWorker(QThread):
             }
             
             results_file = f"{self.output_dir}/batch_results_{int(time.time())}.json"
-            with open(results_file, 'w') as f:
-                json.dump(final_results, f, indent=2)
+            try:
+                with open(results_file, 'w') as f:
+                    json.dump(final_results, f, indent=2)
+                _batch_logger.info(f"Batch processing results saved to: {results_file}")
+            except Exception as e:
+                _batch_logger.error(f"Failed to save batch processing results to {results_file}: {e}", exc_info=True)
             
             self.output_received.emit(f"Results saved to: {results_file}")
             self.batch_completed.emit(final_results)
             
         except ProcessingCancelled:
+            _batch_logger.warning("Batch processing cancelled by user")
             self.output_received.emit("Batch processing cancelled by user")
             self.batch_cancelled.emit()
         except Exception as e:
             error_msg = f"Error during batch processing: {str(e)}"
+            _batch_logger.error(f"Batch processing failed: {error_msg}", exc_info=True)
             self.output_received.emit(f"ERROR: {error_msg}")
             self.batch_failed.emit(error_msg)
 
@@ -455,6 +550,7 @@ class BatchProcessingDialog(QDialog):
         self.video_paths = []
         self.parent_window = parent
         self.skipped_videos_count = 0
+        _batch_logger.info(f"BatchProcessingDialog initialized. Log file: {_batch_log_file}")
         self.setup_ui()
         self.load_current_folder()
     
@@ -707,7 +803,8 @@ class BatchProcessingDialog(QDialog):
                         found_videos.append(video_path)
         
         self.video_paths = found_videos
-        print(f"Found {len(self.video_paths)} unique videos in {folder}: {self.video_paths}")
+        _batch_logger.info(f"Found {len(self.video_paths)} unique videos in {folder}")
+        _batch_logger.debug(f"Video paths: {self.video_paths}")
         # Enable start button if videos found
         if self.video_paths:
             self.start_button.setEnabled(True)
@@ -719,7 +816,10 @@ class BatchProcessingDialog(QDialog):
     def start_processing(self):
         """Start batch processing"""
         if not self.video_paths:
+            _batch_logger.warning("Attempted to start batch processing with no videos")
             return
+        
+        _batch_logger.info(f"Starting batch processing for {len(self.video_paths)} videos")
         
         # Filter out already processed videos if checkbox is checked
         videos_to_process = self.video_paths.copy()
@@ -742,13 +842,16 @@ class BatchProcessingDialog(QDialog):
             videos_to_process = unprocessed_videos
             
             if skipped_count > 0:
+                _batch_logger.info(f"Skipping {skipped_count} already processed video(s)")
                 self.add_output(f"Skipping {skipped_count} already processed video(s):")
                 for video_path in processed_videos:
                     video_name = Path(video_path).stem
                     self.add_output(f"  - {video_name}")
+                    _batch_logger.debug(f"Skipping already processed video: {video_name}")
                 self.add_output("")
         
         if not videos_to_process:
+            _batch_logger.info("All videos have already been processed. Nothing to do.")
             self.status_label.setText("All videos have already been processed!")
             self.add_output("All videos have already been processed. Nothing to do.")
             self.start_button.setEnabled(True)
@@ -766,6 +869,7 @@ class BatchProcessingDialog(QDialog):
         # Get the number of parallel workers from the spinbox
         max_workers = 15
         
+        _batch_logger.info(f"Creating batch processing worker for {len(videos_to_process)} videos (max_workers: {max_workers})")
         self.worker = BatchProcessingWorker(videos_to_process, max_workers=max_workers)
         
         # Connect signals
@@ -780,6 +884,7 @@ class BatchProcessingDialog(QDialog):
         self.start_button.setEnabled(False)
         self.cancel_button.setVisible(True)
         
+        _batch_logger.info("Starting batch processing worker thread")
         self.worker.start()
     
     def update_progress(self, percentage, status):
@@ -802,6 +907,7 @@ class BatchProcessingDialog(QDialog):
     
     def batch_completed(self, results):
         """Handle batch processing completion"""
+        _batch_logger.info(f"Batch processing completed: {results['completed_videos']} succeeded, {results['failed_videos']} failed out of {results['total_videos']} total")
         self.progress_bar.setValue(100)
         self.status_label.setText("Batch processing completed!")
         
@@ -838,9 +944,9 @@ class BatchProcessingDialog(QDialog):
             # Try to find CSV in cache directory based on current folder
             if hasattr(self.parent_window, 'current_folder') and self.parent_window.current_folder:
                 folder_name = os.path.basename(self.parent_window.current_folder.rstrip('/\\'))
-                app_dir = os.path.dirname(os.path.abspath(__file__))
-                project_root = os.path.dirname(app_dir)
-                csv_path = os.path.join(project_root, "cache", folder_name, f"{folder_name}_data.csv")
+                # Use shared cache directory function
+                base_cache_dir = get_cache_dir()
+                csv_path = os.path.join(base_cache_dir, folder_name, f"{folder_name}_data.csv")
                 
                 if os.path.exists(csv_path) and hasattr(self.parent_window, 'load_csv_file'):
                     self.add_output(f"\nReloading data sheet from cache: {csv_path}")
@@ -850,10 +956,11 @@ class BatchProcessingDialog(QDialog):
                     self.add_output(f"\nNote: CSV file not found at {csv_path}")
         except Exception as e:
             self.add_output(f"\nWarning: Could not reload data sheet: {str(e)}")
-            print(f"Error reloading data sheet after batch processing: {e}")
+            _batch_logger.error(f"Error reloading data sheet after batch processing: {e}", exc_info=True)
     
     def batch_failed(self, error_message):
         """Handle batch processing failure"""
+        _batch_logger.error(f"Batch processing failed: {error_message}")
         self.status_label.setText("Batch processing failed!")
         self.add_output(f"\nBatch processing failed: {error_message}")
         
@@ -864,6 +971,7 @@ class BatchProcessingDialog(QDialog):
     
     def batch_cancelled(self):
         """Handle batch processing cancellation"""
+        _batch_logger.info("Batch processing cancelled by user")
         self.status_label.setText("Batch processing cancelled")
         self.add_output(f"\nBatch processing cancelled by user")
         
@@ -875,11 +983,13 @@ class BatchProcessingDialog(QDialog):
     def cancel_processing(self):
         """Cancel batch processing"""
         if self.worker and self.worker.isRunning():
+            _batch_logger.info("User requested cancellation of batch processing")
             self.worker.cancel()
             # Don't wait here - let the worker handle the cancellation
             # The batch_cancelled signal will handle the UI updates
         else:
             # If no worker or worker not running, just update UI
+            _batch_logger.info("Batch processing cancelled (no active worker)")
             self.status_label.setText("Batch processing cancelled")
             self.add_output("\nBatch processing cancelled by user")
             

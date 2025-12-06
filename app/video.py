@@ -8,6 +8,7 @@ import json
 import os
 import cv2
 import numpy as np
+from fileAccess import get_cache_dir
 
 # Define colors for specific position labels
 POSITION_COLORS = {
@@ -16,8 +17,8 @@ POSITION_COLORS = {
     'running_back': QColor(255, 165, 0),    # Orange
     'wide_receiver': QColor(0, 255, 255),   # Cyan
     'tight_end': QColor(255, 0, 255),       # Magenta 
-    'defense': QColor(255, 0, 0),           # Red
-    'player': QColor(128, 128, 128),        # Gray (Generic Player Fallback)
+    'defense': QColor(128, 128, 128),       # Gray 
+    'player': QColor(255, 0, 0),            # Red (Generic Player Fallback)
     'yard_marker': QColor(0, 255, 127)      # Spring Green (Yard Marker)
 }
 YARD_MARKERS = ["f5", "fl1", "fl2", "fl3", "fl4", "fr1", "fr2", "fr3", "fr4", "n5", "nl1", "nl2", "nl3", "nl4", "nr1", "nr2", "nr3", "nr4"]
@@ -1032,9 +1033,10 @@ def load_snap_detection_data(parent, video_path):
     
     try:
         video_name = os.path.splitext(os.path.basename(video_path))[0]
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         current_folder_name = os.path.basename(parent.current_folder)
-        snap_file = os.path.join(project_root, "cache", current_folder_name, "snap_detection", f"{video_name}_snap_detection.json")
+        # Use shared cache directory function
+        base_cache_dir = get_cache_dir()
+        snap_file = os.path.join(base_cache_dir, current_folder_name, "snap_detection", f"{video_name}_snap_detection.json")
         
         if os.path.exists(snap_file):
             with open(snap_file, 'r') as f:
@@ -1152,8 +1154,8 @@ def load_and_set_detection_data(parent, data_type):
     
     # Logic for determining the folder name based on data_type
     if data_type == "positions":
-        data_folder_name = "positions"
-        file_suffix = "_position"
+        data_folder_name = "players"
+        file_suffix = "_detection"
     elif data_type == "yard_markers":
         data_folder_name = "yard_markers"
         file_suffix = "_yard_markers"
@@ -1163,8 +1165,9 @@ def load_and_set_detection_data(parent, data_type):
 
     current_folder_name = getattr(parent, 'current_folder', 'default_folder')
     
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    detection_file = os.path.join(project_root, "cache", os.path.basename(current_folder_name), data_folder_name, f"{video_name}{file_suffix}.json")
+    # Use shared cache directory function
+    base_cache_dir = get_cache_dir()
+    detection_file = os.path.join(base_cache_dir, os.path.basename(current_folder_name), data_folder_name, f"{video_name}{file_suffix}.json")
     
     if os.path.exists(detection_file):
         try:
@@ -1212,10 +1215,10 @@ def load_and_set_detection_data_fallback(parent):
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     
     current_folder_name = getattr(parent, 'current_folder', 'default_folder')
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
-    # Path for generic player detection data
-    detection_file = os.path.join(project_root, "cache", os.path.basename(current_folder_name), "players", f"{video_name}_detection.json")
+    # Use shared cache directory function
+    base_cache_dir = get_cache_dir()
+    detection_file = os.path.join(base_cache_dir, os.path.basename(current_folder_name), "players", f"{video_name}_detection.json")
     
     if os.path.exists(detection_file):
         try:

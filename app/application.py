@@ -8,6 +8,9 @@ from PySide6.QtCore import Qt
 import sys
 import os
 import json
+import logging
+from pathlib import Path
+from datetime import datetime
 import darkdetect
 from video import create_video_dock, set_current_video_path
 from fileAccess import create_file_dock
@@ -220,6 +223,25 @@ def apply_system_theme(app):
 
 
 if __name__ == "__main__":
+    # Set up logging to both console and file
+    log_dir = Path.home() / ".hudl_ai_logs"
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / f"hudl_ai_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)  # Also log to console
+        ]
+    )
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Application starting. Log file: {log_file}")
+    print(f"Debug logs will be saved to: {log_file}")
+    
     # Set attribute BEFORE creating QApplication
     QApplication.setAttribute(Qt.AA_DontUseNativeDialogs, False)
     

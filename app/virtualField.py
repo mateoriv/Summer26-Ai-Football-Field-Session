@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 import sys
 import os
 import json
+from fileAccess import get_cache_dir
 
 # Import the color map definition from video.py for color consistency
 try:
@@ -72,8 +73,9 @@ class VirtualFieldWidget(QWidget):
     def load_homography_data(self, video_name, folder_name):
         """Load homography data for the current video"""
         try:
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            homography_file = os.path.join(project_root, "cache",  os.path.basename(folder_name), "homography", f"{video_name}_normalized_positions.json")
+            # Use shared cache directory function
+            base_cache_dir = get_cache_dir()
+            homography_file = os.path.join(base_cache_dir, os.path.basename(folder_name), "homography", f"{video_name}_normalized_positions.json")
             
             if os.path.exists(homography_file):
                 with open(homography_file, 'r') as f:
@@ -176,7 +178,8 @@ class VirtualFieldWidget(QWidget):
                     
                     if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
                         # Get color from the map, using 'player' as default fallback
-                        dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
+                        # dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
+                        dot_color = POSITION_COLORS['player']
                         
                         # Draw player dot - make it more visible
                         painter.setBrush(QBrush(dot_color))  

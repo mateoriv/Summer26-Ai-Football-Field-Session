@@ -51,20 +51,24 @@ def get_player_data_for_frame(video_name, folder_name=None, cache_dir="cache", p
     Returns:
         Dictionary with processed frame data for all snap frames, or None if not found
     """
-    # Get project root if not provided
-    if project_root is None:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(script_dir)
-    
-   
+    # Determine cache directory path
+    # If cache_dir is absolute, use it directly; otherwise use project_root
+    if os.path.isabs(cache_dir):
+        base_cache_dir = cache_dir
+    else:
+        # Get project root if not provided
+        if project_root is None:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir)
+        base_cache_dir = os.path.join(project_root, cache_dir)
     
     if folder_name is None:
         print(f"[ERROR] Could not find folder containing snap detection for video: {video_name}")
         return None
     
     # Construct absolute paths
-    snap_file_path = os.path.join(project_root, cache_dir, folder_name, "snap_detection", f"{video_name}_snap_detection.json")
-    homography_file_path = os.path.join(project_root, cache_dir, folder_name, "homography", f"{video_name}_normalized_positions.json")
+    snap_file_path = os.path.join(base_cache_dir, folder_name, "snap_detection", f"{video_name}_snap_detection.json")
+    homography_file_path = os.path.join(base_cache_dir, folder_name, "homography", f"{video_name}_normalized_positions.json")
     
     # Load snap detection data
     snap_data = load_data(snap_file_path)
@@ -153,17 +157,23 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
     if frame_data is None:
         return None
     
-    # Get project root if not provided
-    if project_root is None:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(script_dir)
+    # Determine cache directory path
+    # If cache_dir is absolute, use it directly; otherwise use project_root
+    if os.path.isabs(cache_dir):
+        base_cache_dir = cache_dir
+    else:
+        # Get project root if not provided
+        if project_root is None:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir)
+        base_cache_dir = os.path.join(project_root, cache_dir)
     
     if folder_name is None:
         print(f"[ERROR] Folder name required to access CSV file")
         return None
     
     # Construct CSV file path
-    csv_file_path = os.path.join(project_root, cache_dir, folder_name, f"{folder_name}_data.csv")
+    csv_file_path = os.path.join(base_cache_dir, folder_name, f"{folder_name}_data.csv")
     print(f"[INFO] CSV file path: {csv_file_path}")
     if not os.path.exists(csv_file_path):
         print(f"[ERROR] CSV file not found: {csv_file_path}")
@@ -236,9 +246,12 @@ def main():
     parser.add_argument("--folder-name", type=str, default=None,
                         help="Name of the folder containing the video (optional)")
     parser.add_argument("--cache-dir", type=str, default="cache",
-                        help="Cache directory name (default: cache)")
-    
+                        help="Cache directory path (can be absolute or relative to project root)")
     args = parser.parse_args()
+    
+    print(f"Cache directory: {args.cache_dir}")
+    print(f"Video name: {args.video_name}")
+    print(f"Folder name: {args.folder_name}")
     
     # Get player data for snap frames
     frame_data = get_player_data_for_frame(

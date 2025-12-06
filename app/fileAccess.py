@@ -4,7 +4,45 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QDir, QFileInfo
 import os
+import sys
+from pathlib import Path
 import pandas as pd
+
+def get_cache_dir():
+    """
+    Get the cache directory path. Returns a persistent location that works
+    both in development and when compiled with PyInstaller.
+    
+    When compiled: Uses a cache directory next to the executable (persistent)
+    When in development: Uses the project root's cache directory
+    """
+    if hasattr(sys, "_MEIPASS"):
+        # Running as compiled executable - use directory next to executable for persistent cache
+        exe_dir = os.path.dirname(sys.executable)
+        cache_dir = os.path.join(exe_dir, "cache")
+    else:
+        # Running in development mode
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(app_dir)
+        cache_dir = os.path.join(project_root, "cache")
+    
+    # Ensure cache directory exists
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+def get_project_root():
+    """
+    Get the project root directory. For compiled executables, this returns
+    the directory containing the executable. For development, returns the
+    actual project root.
+    """
+    if hasattr(sys, "_MEIPASS"):
+        # Running as compiled executable - use executable directory
+        return os.path.dirname(sys.executable)
+    else:
+        # Running in development mode
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.dirname(app_dir)
 
 def create_file_title_bar(dock):
     """Create a custom title bar for the file access dock widget"""
@@ -185,10 +223,9 @@ def auto_load_folder_content(parent, folder_path):
         # Get folder name and cache directory path
         folder_name = os.path.basename(folder_path.rstrip('/\\'))
         
-        # Get project root (parent of app directory)
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(app_dir)
-        cache_dir = os.path.join(project_root, "cache", folder_name)
+        # Use shared cache directory function
+        base_cache_dir = get_cache_dir()
+        cache_dir = os.path.join(base_cache_dir, folder_name)
         
         # Ensure cache directory exists
         os.makedirs(cache_dir, exist_ok=True)

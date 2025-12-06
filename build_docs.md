@@ -93,6 +93,8 @@ Resulting artifacts:
 ## 6. Distribution Tips & Limitations
 
 - **Cache persistence:** PyInstaller’s `--onefile` mode extracts the bundle to a temporary directory on launch. The `cache/` folder that ships with the binary is therefore recreated on every run and removed when the process ends. If you need long-lived caches, point the UI at an external working directory that already contains your session files, or modify the application to read/write caches from a user-writable path outside the bundle.
+
+- **Debug:** Enable a print console with logs when launching the .exe change `console=False,` to True
 - **Binary size:** Bundling `torch`, `ultralytics`, and multiple YOLO weights easily pushes the executable beyond 3 GB. Compressing or pruning unused weights before building dramatically shortens build time.
 - **Platform-specific builds:** Run PyInstaller on macOS to create `.app`/Mach-O binaries, on Windows for `.exe`, etc. Reuse of the spec file is fine, but the compiled output is not cross-platform.
 - **Subprocess helpers still expect Python:** The GUI kicks off detection pipelines by running `python scripts/...`. Those subprocesses do **not** reuse the interpreter embedded inside the PyInstaller EXE. Ship the same Python environment alongside the binary (or refactor the app to call directly into the packaged modules) if you need these features on a machine without Python installed.

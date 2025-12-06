@@ -17,16 +17,28 @@ import sys
 import json
 import time
 from pathlib import Path
+import pandas as pd
 
 def get_project_root():
     """Return the project root, accounting for PyInstaller one-file extraction."""
-    if hasattr(sys, "_MEIPASS"):
-        return sys._MEIPASS
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Import here to avoid circular imports
+    from fileAccess import get_project_root as get_root
+    return get_root()
+
+def get_cache_dir():
+    """Get the cache directory path."""
+    # Import here to avoid circular imports
+    from fileAccess import get_cache_dir as get_cache
+    return get_cache()
 
 def get_resource_path(*relative_parts):
-    """Build an absolute path rooted at the project directory."""
-    return os.path.join(get_project_root(), *relative_parts)
+    """Build an absolute path rooted at the project directory or _MEIPASS when compiled."""
+    if hasattr(sys, "_MEIPASS"):
+        # Running as compiled executable - scripts are in _MEIPASS
+        return os.path.join(sys._MEIPASS, *relative_parts)
+    else:
+        # Running in development mode
+        return os.path.join(get_project_root(), *relative_parts)
 
 
 def get_python_executable():
@@ -66,9 +78,10 @@ class ProcessingWorker(QThread):
         self.video_path = video_path
         self.video_folder =  os.path.basename(video_folder)
         # Make output directory absolute to avoid working directory issues
-        # If output_dir is relative, make it relative to project root, not app directory
+        # Use persistent cache directory instead of temp PyInstaller folder
         if not os.path.isabs(output_dir):
-            self.output_dir = os.path.join(get_project_root(), output_dir)
+            # Use get_cache_dir() to get persistent cache location
+            self.output_dir = get_cache_dir()
         else:
             self.output_dir = os.path.abspath(output_dir)
         print(f"Output directory: {self.output_dir}")
@@ -92,6 +105,68 @@ class ProcessingWorker(QThread):
         self.pending_step_index = None
         self.user_choice_result = None
         
+    def is_csv_row_augmented(self):
+        """Check if the CSV row for this video has been augmented from default values"""
+        try:
+            csv_file_path = os.path.join(self.output_dir, self.video_folder, f"{self.video_folder}_data.csv")
+            
+            if not os.path.exists(csv_file_path):
+                return False  # CSV doesn't exist, so not augmented
+            
+            # Load CSV file
+            df = pd.read_csv(csv_file_path)
+            
+            # Find the row matching the video name
+            video_row = None
+            for idx, row in df.iterrows():
+                clip_name = str(row.get('CLIP NAME', '')).strip()
+                if clip_name == self.video_name:
+                    video_row = row
+                    break
+            
+            if video_row is None:
+                return False  # Video not found in CSV, so not augmented
+            
+            # Default values (from fileAccess.py create_video_based_csv)
+            default_values = {
+                'HASH': "",
+                'YARD LINE': 0,
+                'PERSONNEL': 0,
+                'BACKFIELD': "",
+                'FIB/FSL': "",
+                'OFF FORM': "",
+                'FORM VARIATION': "",
+                'SET': "",
+                'WR SPLITS': "",
+            }
+            
+            # Check if any field has been modified from default
+            for column, default_value in default_values.items():
+                if column not in video_row:
+                    continue
+                
+                current_value = video_row[column]
+                
+                # Handle numeric comparison for YARD LINE and PERSONNEL
+                if column in ['YARD LINE', 'PERSONNEL']:
+                    try:
+                        current_value = int(float(str(current_value))) if pd.notna(current_value) else 0
+                    except (ValueError, TypeError):
+                        current_value = 0
+                    if current_value != default_value:
+                        return True  # Augmented
+                else:
+                    # Handle string comparison for other fields
+                    current_str = str(current_value).strip() if pd.notna(current_value) else ""
+                    if current_str != default_value:
+                        return True  # Augmented
+            
+            return False  # All values are at defaults, not augmented
+            
+        except Exception as e:
+            print(f"Error checking CSV augmentation: {e}")
+            return False  # On error, assume not augmented
+    
     def check_step_completed(self, step_index):
         """Check if a processing step has already been completed""" 
         if step_index == 0:  # Player Detection
@@ -116,7 +191,12 @@ class ProcessingWorker(QThread):
             # Static process doesn't create a file, so we check if homography exists (prerequisite)
             homography_file = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
             snap_file = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
-            return os.path.exists(homography_file) and os.path.exists(snap_file)
+            # Check prerequisites exist AND CSV row has been augmented
+            prerequisites_exist = os.path.exists(homography_file) and os.path.exists(snap_file)
+            if not prerequisites_exist:
+                return False
+            # If prerequisites exist, check if CSV has been augmented
+            return self.is_csv_row_augmented()
         return False
     
     def ask_user_skip_step(self, step_name, step_index):
@@ -192,6 +272,12 @@ class ProcessingWorker(QThread):
             correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
             self.homography_output = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_normalized_positions.json"
         
+            print(f"Detection output: {self.detection_output}")
+            print(f"Position output: {self.position_output}")
+            print(f"Snap output: {self.snap_output}")
+            print(f"Yard marker output: {yard_marker_output}")
+            print(f"Correspondence output: {correspondence_output}")
+            print(f"Homography output: {self.homography_output}")
             if self.current_step == 0:
                 # Step 1: Player Detection
                 step_name = "Player Detection"
@@ -256,7 +342,7 @@ class ProcessingWorker(QThread):
                 
                 
                 position_cmd = [
-                    get_python_executable(), "scripts/positionDetection.py",
+                    get_python_executable(), get_resource_path("scripts", "positionDetection.py"),
                     "--video", self.video_path, 
                     "--output", self.position_output
                 ]
@@ -425,8 +511,8 @@ class ProcessingWorker(QThread):
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
                     homography_cmd = [
-                        get_python_executable(), "scripts/perFrameHomographyTransform.py",
-                        "--position-detections", self.position_output,
+                        get_python_executable(), get_resource_path("scripts", "perFrameHomographyTransform.py"),
+                        "--position-detections", self.detection_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
                     ]
@@ -465,20 +551,27 @@ class ProcessingWorker(QThread):
                     self.step_completed.emit(step_name, False)
                     return
                 
-                # Check if step is already completed (optional - static process can be re-run)
-                if self.check_step_completed(6):
-                    self.output_received.emit(f"✓ {step_name} prerequisites met!")
-                    user_choice = self.ask_user_skip_step(step_name, 6)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name}")
-                        self.step_completed.emit(step_name, True)
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
+                # Check if CSV row has been augmented from default values
+                is_augmented = self.is_csv_row_augmented()
+                
+                if is_augmented:
+                    # CSV has been modified, check if step is already completed and prompt
+                    if self.check_step_completed(6):
+                        self.output_received.emit(f"✓ {step_name} prerequisites met and CSV data has been augmented!")
+                        user_choice = self.ask_user_skip_step(step_name, 6)
+                        
+                        if user_choice == "cancel":
+                            self.processing_failed.emit("Processing cancelled by user")
+                            return
+                        elif user_choice == "skip":
+                            self.output_received.emit(f"Skipping {step_name}")
+                            self.step_completed.emit(step_name, True)
+                            return
+                        else:  # rerun
+                            self.output_received.emit(f"Re-running {step_name}...")
+                else:
+                    # CSV row is still at defaults, run automatically without prompting
+                    self.output_received.emit(f"CSV row is at default values, running {step_name} automatically...")
                 
                 self.progress_updated.emit(0, "Step 7: Loading snap detection data...")
                 self.output_received.emit("Step 7: Running static process...")
@@ -491,7 +584,7 @@ class ProcessingWorker(QThread):
                         get_python_executable(), get_resource_path("CNN", "staticProcess.py"),
                         "--video-name", self.video_name,
                         "--folder-name", self.video_folder,
-                        "--cache-dir", "cache"
+                        "--cache-dir", self.output_dir
                     ]
                     
                     if self.is_cancelled:
@@ -520,9 +613,14 @@ class ProcessingWorker(QThread):
         if self.is_cancelled:
             return False
             
-        # Get the correct working directory (project root)
-        project_root = get_project_root()
-        self.output_received.emit(f"Working directory: {project_root}")
+        # Get the correct working directory
+        # When compiled, use _MEIPASS where bundled files are located
+        # When in development, use project root
+        if hasattr(sys, "_MEIPASS"):
+            working_dir = sys._MEIPASS
+        else:
+            working_dir = get_project_root()
+        self.output_received.emit(f"Working directory: {working_dir}")
         self.output_received.emit(f"Running: {' '.join(cmd)}")
         
         try:
@@ -537,7 +635,7 @@ class ProcessingWorker(QThread):
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
-                cwd=project_root,
+                cwd=working_dir,
                 env=env
             )
 
@@ -675,7 +773,12 @@ class ProcessingWorker(QThread):
                 self.output_received.emit("=" * 60)
                 self.output_received.emit(f"ERROR: {step_name} failed with return code {return_code}")
                 self.output_received.emit(f"Command: {' '.join(cmd)}")
-                self.output_received.emit(f"Working directory: {project_root}")
+                # Get working directory (use _MEIPASS when compiled)
+                if hasattr(sys, "_MEIPASS"):
+                    working_dir = sys._MEIPASS
+                else:
+                    working_dir = get_project_root()
+                self.output_received.emit(f"Working directory: {working_dir}")
                 if remaining_errors:
                     self.output_received.emit("")
                     self.output_received.emit("Error output:")
@@ -692,7 +795,12 @@ class ProcessingWorker(QThread):
             self.output_received.emit(f"ERROR: Exception occurred while running {step_name}")
             self.output_received.emit(f"Exception: {str(e)}")
             self.output_received.emit(f"Command: {' '.join(cmd)}")
-            self.output_received.emit(f"Working directory: {project_root}")
+            # Get working directory (use _MEIPASS when compiled)
+            if hasattr(sys, "_MEIPASS"):
+                working_dir = sys._MEIPASS
+            else:
+                working_dir = get_project_root()
+            self.output_received.emit(f"Working directory: {working_dir}")
             self.output_received.emit("")
             self.output_received.emit("Traceback:")
             for line in error_traceback.splitlines():
@@ -1111,7 +1219,9 @@ class ProcessingDialog(QDialog):
                     # Try to find CSV in cache directory
                     if hasattr(parent_window, 'current_folder') and parent_window.current_folder:
                         folder_name = os.path.basename(parent_window.current_folder.rstrip('/\\'))
-                        csv_path = os.path.join(get_project_root(), "cache", folder_name, f"{folder_name}_data.csv")
+                        # Use shared cache directory function
+                        base_cache_dir = get_cache_dir()
+                        csv_path = os.path.join(base_cache_dir, folder_name, f"{folder_name}_data.csv")
                         if os.path.exists(csv_path) and hasattr(parent_window, 'load_csv_file'):
                             self.add_output(f"Reloading data sheet from cache: {csv_path}")
                             parent_window.load_csv_file(csv_path)
