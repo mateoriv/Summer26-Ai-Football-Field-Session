@@ -21,7 +21,7 @@ from palette import get_light_palette, get_dark_palette
 class MainWindow(QMainWindow):
     def __init__(self, dark_mode=False):
         super().__init__()
-
+        self.is_dark = dark_mode
         self.setWindowTitle("Hudl AI Analysis")
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
         self.resize(1200, 800)
@@ -147,11 +147,13 @@ class MainWindow(QMainWindow):
     def apply_palette(self, palette, dark_mode):
         """Apply palette and sync menu bar colors."""
         QApplication.instance().setPalette(palette)
+        self.is_dark = dark_mode 
         self.set_menu_colors(dark_mode)
 
     def apply_system_palette(self):
         """Follow OS theme and sync menu bar colors."""
         is_dark = darkdetect.isDark()
+        self.is_dark = is_dark
         palette = get_dark_palette() if is_dark else get_light_palette()
         self.apply_palette(palette, is_dark)
 
@@ -211,7 +213,33 @@ class MainWindow(QMainWindow):
                 load_folder(self, self.current_folder, change_view=True)
             except Exception as e:
                 print(f"Error loading default folder: {e}")
+    def position_legend(self):
+        # legend must exist
+        if not hasattr(self, "legend_widget") or self.legend_widget is None:
+            return
 
+        # dock must exist
+        if not hasattr(self, "video_dock") or self.video_dock is None:
+            return
+        
+        # inner content area of the dock
+        dock_widget = self.video_dock.widget()
+        if dock_widget is None:
+            return
+
+        # compute the global position of the dock's top-left corner
+        top_left = dock_widget.mapToGlobal(dock_widget.rect().topLeft())
+
+        # move legend there
+        self.legend_widget.move(top_left)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self.position_legend()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.position_legend()
 
 def apply_system_theme(app):
     if darkdetect.isDark():
@@ -220,6 +248,8 @@ def apply_system_theme(app):
     else:
         app.setPalette(get_light_palette())
         return False
+
+
 
 
 if __name__ == "__main__":
