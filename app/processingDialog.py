@@ -512,7 +512,7 @@ class ProcessingWorker(QThread):
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
                     homography_cmd = [
                         get_python_executable(), get_resource_path("scripts", "perFrameHomographyTransform.py"),
-                        "--position-detections", self.detection_output,
+                        "--position-detections", self.position_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
                     ]
