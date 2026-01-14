@@ -8,9 +8,6 @@ from PySide6.QtCore import Qt
 import sys
 import os
 import json
-import logging
-from pathlib import Path
-from datetime import datetime
 import darkdetect
 from video import create_video_dock, set_current_video_path
 from fileAccess import create_file_dock
@@ -21,7 +18,7 @@ from palette import get_light_palette, get_dark_palette
 class MainWindow(QMainWindow):
     def __init__(self, dark_mode=False):
         super().__init__()
-        self.is_dark = dark_mode
+
         self.setWindowTitle("Hudl AI Analysis")
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
         self.resize(1200, 800)
@@ -147,13 +144,11 @@ class MainWindow(QMainWindow):
     def apply_palette(self, palette, dark_mode):
         """Apply palette and sync menu bar colors."""
         QApplication.instance().setPalette(palette)
-        self.is_dark = dark_mode 
         self.set_menu_colors(dark_mode)
 
     def apply_system_palette(self):
         """Follow OS theme and sync menu bar colors."""
         is_dark = darkdetect.isDark()
-        self.is_dark = is_dark
         palette = get_dark_palette() if is_dark else get_light_palette()
         self.apply_palette(palette, is_dark)
 
@@ -213,33 +208,7 @@ class MainWindow(QMainWindow):
                 load_folder(self, self.current_folder, change_view=True)
             except Exception as e:
                 print(f"Error loading default folder: {e}")
-    def position_legend(self):
-        # legend must exist
-        if not hasattr(self, "legend_widget") or self.legend_widget is None:
-            return
 
-        # dock must exist
-        if not hasattr(self, "video_dock") or self.video_dock is None:
-            return
-        
-        # inner content area of the dock
-        dock_widget = self.video_dock.widget()
-        if dock_widget is None:
-            return
-
-        # compute the global position of the dock's top-left corner
-        top_left = dock_widget.mapToGlobal(dock_widget.rect().topLeft())
-
-        # move legend there
-        self.legend_widget.move(top_left)
-
-    def moveEvent(self, event):
-        super().moveEvent(event)
-        self.position_legend()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.position_legend()
 
 def apply_system_theme(app):
     if darkdetect.isDark():
@@ -250,28 +219,38 @@ def apply_system_theme(app):
         return False
 
 
-
-
 if __name__ == "__main__":
-    # Set up logging to both console and file
-    log_dir = Path.home() / ".hudl_ai_logs"
-    log_dir.mkdir(exist_ok=True)
-    log_file = log_dir / f"hudl_ai_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    # Check if we're being called to run a script (from PyInstaller subprocess)
+    if os.environ.get('PYINSTALLER_RUN_SCRIPT'):
+        # We're being called to run a script, not launch the GUI
+        script_path = os.environ.get('PYINSTALLER_RUN_SCRIPT')
+        script_args_str = os.environ.get('PYINSTALLER_SCRIPT_ARGS', '')
+        script_argv_str = os.environ.get('PYINSTALLER_SCRIPT_ARGV', '')
+        
+        # Parse arguments
+        if script_argv_str:
+            # Reconstruct sys.argv from the pipe-separated string
+            sys.argv = script_argv_str.split('|')
+        elif script_args_str:
+            # Fallback: use script name + args
+            sys.argv = [os.path.basename(script_path)] + script_args_str.split('|') if script_args_str else []
+        else:
+            sys.argv = [os.path.basename(script_path)]
+        
+        # Run the script using runpy
+        import runpy
+        try:
+            runpy.run_path(script_path, run_name='__main__')
+        except SystemExit as e:
+            sys.exit(e.code)
+        except Exception as e:
+            print(f"Error running script: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        sys.exit(0)
     
-    # Configure logging
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)  # Also log to console
-        ]
-    )
-    
-    logger = logging.getLogger(__name__)
-    logger.info(f"Application starting. Log file: {log_file}")
-    print(f"Debug logs will be saved to: {log_file}")
-    
+    # Normal GUI mode
     # Set attribute BEFORE creating QApplication
     QApplication.setAttribute(Qt.AA_DontUseNativeDialogs, False)
     

@@ -77,7 +77,16 @@ def get_resource_path(*parts):
 
 
 def get_python_executable():
-    """Get the correct Python executable for the current platform"""
+    """Get the correct Python executable for the current platform
+    
+    When running as a PyInstaller executable, returns sys.executable.
+    When running in development, returns the system Python executable.
+    """
+    # If running as PyInstaller bundle, use sys.executable
+    if hasattr(sys, "_MEIPASS") or getattr(sys, 'frozen', False):
+        return sys.executable
+    
+    # Running in development mode - use system Python
     if sys.platform.startswith('win'):
         # On Windows, try 'python' first, then 'python3'
         for cmd in ['python', 'python3']:
@@ -98,6 +107,37 @@ def get_python_executable():
             except FileNotFoundError:
                 continue
         return 'python3'  # Fallback
+
+def build_script_command(script_path, *args):
+    """Build a command to run a Python script, handling PyInstaller bundles correctly.
+    
+    Args:
+        script_path: Path to the Python script
+        *args: Additional command-line arguments for the script
+    
+    Returns:
+        Tuple of (command_list, env_dict, script_path) for PyInstaller mode
+        Or just command_list for development mode
+    """
+    python_exe = get_python_executable()
+    
+    if hasattr(sys, "_MEIPASS") or getattr(sys, 'frozen', False):
+        # For PyInstaller: use environment variable to signal script execution mode
+        # The application.py will check this and run the script instead of launching GUI
+        env = os.environ.copy()
+        env['PYINSTALLER_RUN_SCRIPT'] = script_path
+        
+        # Build sys.argv for the script (pipe-separated for safety)
+        argv_items = [os.path.basename(script_path)] + [str(arg) for arg in args]
+        argv_str = '|'.join(argv_items)
+        env['PYINSTALLER_SCRIPT_ARGV'] = argv_str
+        
+        # Return command (just the executable), env dict, and script path
+        # The _run_command_standalone method will need to use the env
+        return ([python_exe], env, script_path)
+    else:
+        # Development mode: normal execution
+        return ([python_exe, script_path] + list(args), None, None)
 
 # Required for ProcessPoolExecutor on Windows
 if __name__ == '__main__':
@@ -204,70 +244,128 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
         print(f"Correspondence output: {correspondence_output}")
         print(f"Homography output: {homography_output}")
         
+        # Build script commands using the helper function
+        cmd_result = build_script_command(
+            get_resource_path("scripts", "playerDetection.py"),
+            "--video", video_path,
+            "--output", detection_output
+        )
+        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+            player_cmd, player_env, _ = cmd_result
+        else:
+            player_cmd = cmd_result
+            player_env = None
+        
+        cmd_result = build_script_command(
+            get_resource_path("scripts", "positionDetection.py"),
+            "--video", video_path,
+            "--output", position_output
+        )
+        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+            position_cmd, position_env, _ = cmd_result
+        else:
+            position_cmd = cmd_result
+            position_env = None
+        
+        cmd_result = build_script_command(
+            get_resource_path("scripts", "snapDetection.py"),
+            "--player-detections", detection_output,
+            "--output", snap_output
+        )
+        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+            snap_cmd, snap_env, _ = cmd_result
+        else:
+            snap_cmd = cmd_result
+            snap_env = None
+        
+        cmd_result = build_script_command(
+            get_resource_path("scripts", "yardMarkerDetection.py"),
+            "--video", video_path,
+            "--output", yard_marker_output
+        )
+        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+            yard_marker_cmd, yard_marker_env, _ = cmd_result
+        else:
+            yard_marker_cmd = cmd_result
+            yard_marker_env = None
+        
         steps = [
             {
                 "name": "Player Detection",
-                "cmd": [
-                    get_python_executable(), get_resource_path("scripts", "playerDetection.py"),
-                    "--video", video_path,
-                    "--output", detection_output
-                ]
+                "cmd": player_cmd,
+                "env": player_env
             },
             {
                 "name": "Position Detection",
-                "cmd": [
-                    get_python_executable(), get_resource_path("scripts", "positionDetection.py"),
-                    "--video", video_path,
-                    "--output", position_output
-                ]
+                "cmd": position_cmd,
+                "env": position_env
             },
             {
                 "name": "Snap Detection",
-                "cmd": [
-                    get_python_executable(), get_resource_path("scripts", "snapDetection.py"),
-                    "--player-detections", detection_output,
-                    "--output", snap_output
-                ]
+                "cmd": snap_cmd,
+                "env": snap_env
             },
             {
                 "name": "Yard Marker Detection",
-                "cmd": [
-                    get_python_executable(), get_resource_path("scripts", "yardMarkerDetection.py"),
-                    "--video", video_path,
-                    "--output", yard_marker_output
-                ]
+                "cmd": yard_marker_cmd,
+                "env": yard_marker_env
             },
             {
                 "name": "Correspondence Points Generation",
-                "cmd": [
-                    get_python_executable(), get_resource_path("scripts", "autoCorrespondancePoints.py"),
-                    "--detection-json", yard_marker_output,
-                    "--output", correspondence_output,
-                    "--confidence", "0.7",
-                    "--per-frame"
-                ]
+                "cmd": None,  # Will be set below
+                "env": None
             },
             {
                 "name": "Homography Transformation",
-                "cmd": [
-                    get_python_executable(), get_resource_path("scripts", "perFrameHomographyTransform.py"),
-                    "--position-detections", detection_output,
-                    "--correspondence-points", correspondence_output,
-                    "--output", homography_output
-                ],
+                "cmd": None,  # Will be set below
+                "env": None,
                 "prereq": [correspondence_output, detection_output]
             },
             {
                 "name": "Static Process",
-                "cmd": [
-                    get_python_executable(), get_resource_path("CNN", "staticProcess.py"),
-                    "--video-name", video_name,
-                    "--folder-name", video_folder,
-                    "--cache-dir", output_dir
-                ],
+                "cmd": None,  # Will be set below
+                "env": None,
                 "prereq": [snap_output, homography_output]
             }
         ]
+        
+        # Build remaining script commands
+        cmd_result = build_script_command(
+            get_resource_path("scripts", "autoCorrespondancePoints.py"),
+            "--detection-json", yard_marker_output,
+            "--output", correspondence_output,
+            "--confidence", "0.7",
+            "--per-frame"
+        )
+        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+            steps[4]["cmd"], steps[4]["env"], _ = cmd_result
+        else:
+            steps[4]["cmd"] = cmd_result
+            steps[4]["env"] = None
+        
+        cmd_result = build_script_command(
+            get_resource_path("scripts", "perFrameHomographyTransform.py"),
+            "--position-detections", detection_output,
+            "--correspondence-points", correspondence_output,
+            "--output", homography_output
+        )
+        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+            steps[5]["cmd"], steps[5]["env"], _ = cmd_result
+        else:
+            steps[5]["cmd"] = cmd_result
+            steps[5]["env"] = None
+        
+        cmd_result = build_script_command(
+            get_resource_path("CNN", "staticProcess.py"),
+            "--video-name", video_name,
+            "--folder-name", video_folder,
+            "--cache-dir", output_dir
+        )
+        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+            steps[6]["cmd"], steps[6]["env"], _ = cmd_result
+        else:
+            steps[6]["cmd"] = cmd_result
+            steps[6]["env"] = None
         
         emit_output(f"Starting processing for {video_name}")
         _batch_logger.debug(f"Processing {video_name}: Output directory: {output_dir}, Video folder: {video_folder}")
@@ -296,7 +394,8 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
                 step["cmd"],
                 step_name,
                 output_callback=lambda msg, step_name=step_name: emit_output(f"{step_name}: {msg}"),
-                cancel_check=cancel_check
+                cancel_check=cancel_check,
+                env=step.get("env")
             )
             
             if not success:
@@ -319,8 +418,16 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
         emit_output(f"Error processing {video_path}: {str(e)}")
         return False
 
-def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=None):
-    """Run a command and stream output, optionally supporting cancellation."""
+def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=None, env=None):
+    """Run a command and stream output, optionally supporting cancellation.
+    
+    Args:
+        cmd: Command list to execute
+        step_name: Name of the processing step
+        output_callback: Optional callback function for output messages
+        cancel_check: Optional function to check if processing should be cancelled
+        env: Optional environment dictionary (for PyInstaller script execution)
+    """
     # Get working directory (use _MEIPASS when compiled)
     if hasattr(sys, "_MEIPASS"):
         working_dir = sys._MEIPASS
@@ -332,8 +439,13 @@ def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=N
     _batch_logger.debug(f"Working directory: {working_dir}")
     
     try:
-        env = os.environ.copy()
-        env['PYTHONUNBUFFERED'] = '1'
+        # Merge provided env with current environment
+        if env is None:
+            process_env = os.environ.copy()
+        else:
+            process_env = os.environ.copy()
+            process_env.update(env)
+        process_env['PYTHONUNBUFFERED'] = '1'
         
         process = subprocess.Popen(
             cmd,
@@ -343,7 +455,7 @@ def _run_command_standalone(cmd, step_name, output_callback=None, cancel_check=N
             bufsize=1,
             universal_newlines=True,
             cwd=working_dir,
-            env=env
+            env=process_env
         )
         
         while True:

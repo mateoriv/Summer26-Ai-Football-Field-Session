@@ -42,7 +42,16 @@ def get_resource_path(*relative_parts):
 
 
 def get_python_executable():
-    """Get the correct Python executable for the current platform"""
+    """Get the correct Python executable for the current platform
+    
+    When running as a PyInstaller executable, returns sys.executable.
+    When running in development, returns the system Python executable.
+    """
+    # If running as PyInstaller bundle, use sys.executable
+    if hasattr(sys, "_MEIPASS") or getattr(sys, 'frozen', False):
+        return sys.executable
+    
+    # Running in development mode - use system Python
     if sys.platform.startswith('win'):
         # On Windows, try 'python' first, then 'python3'
         for cmd in ['python', 'python3']:
@@ -63,6 +72,37 @@ def get_python_executable():
             except FileNotFoundError:
                 continue
         return 'python3'  # Fallback
+
+def build_script_command(script_path, *args):
+    """Build a command to run a Python script, handling PyInstaller bundles correctly.
+    
+    Args:
+        script_path: Path to the Python script
+        *args: Additional command-line arguments for the script
+    
+    Returns:
+        Tuple of (command_list, env_dict, script_path) for PyInstaller mode
+        Or just command_list for development mode
+    """
+    python_exe = get_python_executable()
+    
+    if hasattr(sys, "_MEIPASS") or getattr(sys, 'frozen', False):
+        # For PyInstaller: use environment variable to signal script execution mode
+        # The application.py will check this and run the script instead of launching GUI
+        env = os.environ.copy()
+        env['PYINSTALLER_RUN_SCRIPT'] = script_path
+        
+        # Build sys.argv for the script (pipe-separated for safety)
+        argv_items = [os.path.basename(script_path)] + [str(arg) for arg in args]
+        argv_str = '|'.join(argv_items)
+        env['PYINSTALLER_SCRIPT_ARGV'] = argv_str
+        
+        # Return command (just the executable), env dict, and script path
+        # The _run_command method will need to use the env
+        return ([python_exe], env, script_path)
+    else:
+        # Development mode: normal execution
+        return ([python_exe, script_path] + list(args), None, None)
 
 class ProcessingWorker(QThread):
     """Worker thread for processing video"""
@@ -302,16 +342,21 @@ class ProcessingWorker(QThread):
                 self.output_received.emit("Step 1: Running player detection...")
                 
                 
-                detection_cmd = [
-                    get_python_executable(), get_resource_path("scripts", "playerDetection.py"),
-                    "--video", self.video_path, 
+                cmd_result = build_script_command(
+                    get_resource_path("scripts", "playerDetection.py"),
+                    "--video", self.video_path,
                     "--output", self.detection_output
-                ]
+                )
+                if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+                    detection_cmd, cmd_env, _ = cmd_result
+                else:
+                    detection_cmd = cmd_result
+                    cmd_env = None
                 
                 if self.is_cancelled:
                     return
                     
-                result = self._run_command(detection_cmd, "Player Detection", 0, 100)
+                result = self._run_command(detection_cmd, "Player Detection", 0, 100, env=cmd_env)
                 if result:
                     self.step_completed.emit("Player Detection", True)
                 else:
@@ -341,16 +386,21 @@ class ProcessingWorker(QThread):
                 self.output_received.emit("Step 2: Running position detection...")
                 
                 
-                position_cmd = [
-                    get_python_executable(), get_resource_path("scripts", "positionDetection.py"),
-                    "--video", self.video_path, 
+                cmd_result = build_script_command(
+                    get_resource_path("scripts", "positionDetection.py"),
+                    "--video", self.video_path,
                     "--output", self.position_output
-                ]
+                )
+                if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+                    position_cmd, cmd_env, _ = cmd_result
+                else:
+                    position_cmd = cmd_result
+                    cmd_env = None
                 
                 if self.is_cancelled:
                     return
                     
-                result = self._run_command(position_cmd, "Position Detection", 0, 100)
+                result = self._run_command(position_cmd, "Position Detection", 0, 100, env=cmd_env)
                 if result:
                     self.step_completed.emit("Position Detection", True)
                 else:
@@ -379,16 +429,21 @@ class ProcessingWorker(QThread):
                 self.progress_updated.emit(0, "Step 3: Initializing snap detection...")
                 self.output_received.emit("Step 3: Running snap detection...")
                 
-                snap_cmd = [
-                    get_python_executable(), get_resource_path("scripts", "snapDetection.py"),
+                cmd_result = build_script_command(
+                    get_resource_path("scripts", "snapDetection.py"),
                     "--player-detections", self.detection_output,
                     "--output", self.snap_output
-                ]
+                )
+                if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+                    snap_cmd, cmd_env, _ = cmd_result
+                else:
+                    snap_cmd = cmd_result
+                    cmd_env = None
                 
                 if self.is_cancelled:
                     return
                     
-                result = self._run_command(snap_cmd, "Snap Detection", 0, 100)
+                result = self._run_command(snap_cmd, "Snap Detection", 0, 100, env=cmd_env)
                 if result:
                     self.step_completed.emit("Snap Detection", True)
                 else:
@@ -418,16 +473,21 @@ class ProcessingWorker(QThread):
                 self.output_received.emit("Step 4: Running yard marker detection...")
                 
                 
-                yard_marker_cmd = [
-                    get_python_executable(), get_resource_path("scripts", "yardMarkerDetection.py"),
+                cmd_result = build_script_command(
+                    get_resource_path("scripts", "yardMarkerDetection.py"),
                     "--video", self.video_path,
                     "--output", yard_marker_output
-                ]
+                )
+                if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+                    yard_marker_cmd, cmd_env, _ = cmd_result
+                else:
+                    yard_marker_cmd = cmd_result
+                    cmd_env = None
                 
                 if self.is_cancelled:
                     return
                     
-                result = self._run_command(yard_marker_cmd, "Yard Marker Detection", 0, 100)
+                result = self._run_command(yard_marker_cmd, "Yard Marker Detection", 0, 100, env=cmd_env)
                 if result:
                     self.step_completed.emit("Yard Marker Detection", True)
                 else:
@@ -462,18 +522,23 @@ class ProcessingWorker(QThread):
                 
 
                 
-                correspondence_cmd = [
-                    get_python_executable(), get_resource_path("scripts", "autoCorrespondancePoints.py"),
+                cmd_result = build_script_command(
+                    get_resource_path("scripts", "autoCorrespondancePoints.py"),
                     "--detection-json", yard_marker_output,
                     "--output", correspondence_output,
                     "--confidence", "0.7",
                     "--per-frame"
-                ]
+                )
+                if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+                    correspondence_cmd, cmd_env, _ = cmd_result
+                else:
+                    correspondence_cmd = cmd_result
+                    cmd_env = None
                 
                 if self.is_cancelled:
                     return
                     
-                result = self._run_command(correspondence_cmd, "Correspondence Points Generation", 0, 100)
+                result = self._run_command(correspondence_cmd, "Correspondence Points Generation", 0, 100, env=cmd_env)
                 if result:
                     # Update virtual field with yard marker dots (show frame 0 by default)
                     from virtualField import update_field_with_correspondence_points
@@ -510,17 +575,22 @@ class ProcessingWorker(QThread):
                 
                 if os.path.exists(correspondence_file):
                     self.output_received.emit("Correspondence points found, running per-frame homography transformation...")
-                    homography_cmd = [
-                        get_python_executable(), get_resource_path("scripts", "perFrameHomographyTransform.py"),
+                    cmd_result = build_script_command(
+                        get_resource_path("scripts", "perFrameHomographyTransform.py"),
                         "--position-detections", self.detection_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
-                    ]
+                    )
+                    if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+                        homography_cmd, cmd_env, _ = cmd_result
+                    else:
+                        homography_cmd = cmd_result
+                        cmd_env = None
                 
                     if self.is_cancelled:
                         return
                         
-                    result = self._run_command(homography_cmd, "Homography Transformation", 0, 100)
+                    result = self._run_command(homography_cmd, "Homography Transformation", 0, 100, env=cmd_env)
                     print(f"DEBUG: Homography result={result}")
                     if result:
                         print("DEBUG: Emitting step_completed signal for Homography Transformation (True)")
@@ -580,17 +650,22 @@ class ProcessingWorker(QThread):
                 try:
                     
                     # Run static process
-                    static_process_cmd = [
-                        get_python_executable(), get_resource_path("CNN", "staticProcess.py"),
+                    cmd_result = build_script_command(
+                        get_resource_path("CNN", "staticProcess.py"),
                         "--video-name", self.video_name,
                         "--folder-name", self.video_folder,
                         "--cache-dir", self.output_dir
-                    ]
+                    )
+                    if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+                        static_process_cmd, cmd_env, _ = cmd_result
+                    else:
+                        static_process_cmd = cmd_result
+                        cmd_env = None
                     
                     if self.is_cancelled:
                         return
                     
-                    result = self._run_command(static_process_cmd, step_name, 0, 100)
+                    result = self._run_command(static_process_cmd, step_name, 0, 100, env=cmd_env)
                     if result:
                         self.step_completed.emit(step_name, True)
                     else:
@@ -608,8 +683,16 @@ class ProcessingWorker(QThread):
             self.output_received.emit(f"ERROR: {error_msg}")
             self.processing_failed.emit(error_msg)
     
-    def _run_command(self, cmd, step_name, progress_start, progress_end):
-        """Run a command and handle output with progress updates"""
+    def _run_command(self, cmd, step_name, progress_start, progress_end, env=None):
+        """Run a command and handle output with progress updates
+        
+        Args:
+            cmd: Command list to execute
+            step_name: Name of the processing step
+            progress_start: Starting progress percentage
+            progress_end: Ending progress percentage
+            env: Optional environment dictionary (for PyInstaller script execution)
+        """
         if self.is_cancelled:
             return False
             
@@ -625,8 +708,13 @@ class ProcessingWorker(QThread):
         
         try:
             # Start the process with correct working directory and unbuffered output
-            env = os.environ.copy()
-            env['PYTHONUNBUFFERED'] = '1'
+            if env is None:
+                process_env = os.environ.copy()
+            else:
+                # Merge provided env with current environment
+                process_env = os.environ.copy()
+                process_env.update(env)
+            process_env['PYTHONUNBUFFERED'] = '1'
 
             self.process = subprocess.Popen(
                 cmd,
@@ -636,7 +724,7 @@ class ProcessingWorker(QThread):
                 bufsize=1,
                 universal_newlines=True,
                 cwd=working_dir,
-                env=env
+                env=process_env
             )
 
             # Simple output reading with progress updates

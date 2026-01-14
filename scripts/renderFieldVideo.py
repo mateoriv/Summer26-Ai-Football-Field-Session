@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
 import cv2
+import sys
 
 # Field constants (yards) - same as drawPlayers.py
 FIELD_LENGTH = 120.0                # 120 yards (100 + 2 endzones)
@@ -237,4 +238,4 @@ def main():
     return 0
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

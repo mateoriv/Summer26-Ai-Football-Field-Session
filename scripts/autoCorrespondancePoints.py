@@ -26,6 +26,7 @@ NCAA Standards:
 import json
 import os
 import numpy as np
+import sys
 from collections import defaultdict
 
 # NCAA Field dimensions (in feet)
@@ -542,4 +543,4 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())
