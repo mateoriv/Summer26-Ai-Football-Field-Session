@@ -178,8 +178,8 @@ class VirtualFieldWidget(QWidget):
                     
                     if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
                         # Get color from the map, using 'player' as default fallback
-                        # dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
-                        dot_color = POSITION_COLORS['player']
+                        dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
+                        # dot_color = POSITION_COLORS['player']
                         
                         # Draw player dot - make it more visible
                         painter.setBrush(QBrush(dot_color))  

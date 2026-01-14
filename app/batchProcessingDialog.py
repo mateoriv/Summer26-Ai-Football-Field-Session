@@ -154,6 +154,7 @@ def is_video_processed(video_path, video_folder, output_dir="cache"):
     - correspondence/{video_name}_correspondence.json
     - homography/{video_name}_normalized_positions.json
     - players/{video_name}_detection.json
+    - positions/{video_name}_position.json
     - snap_detection/{video_name}_snap_detection.json
     - yard_markers/{video_name}_yard_markers.json
     """
@@ -178,6 +179,7 @@ def is_video_processed(video_path, video_folder, output_dir="cache"):
             os.path.join(base_dir, "correspondence", f"{video_name}_correspondence.json"),
             os.path.join(base_dir, "homography", f"{video_name}_normalized_positions.json"),
             os.path.join(base_dir, "players", f"{video_name}_detection.json"),
+            os.path.join(base_dir, "positions", f"{video_name}_position.json"),
             os.path.join(base_dir, "snap_detection", f"{video_name}_snap_detection.json"),
             os.path.join(base_dir, "yard_markers", f"{video_name}_yard_markers.json"),
         ]
@@ -223,6 +225,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
         directories = [
             base_dir,
             os.path.join(base_dir, "players"),
+            os.path.join(base_dir, "positions"),
             os.path.join(base_dir, "snap_detection"),
             os.path.join(base_dir, "yard_markers"),
             os.path.join(base_dir, "correspondence"),
@@ -233,6 +236,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             os.makedirs(directory, exist_ok=True)
         
         detection_output = os.path.join(base_dir, "players", f"{video_name}_detection.json")
+        position_output = os.path.join(base_dir, "positions", f"{video_name}_position.json")
         position_output = os.path.join(base_dir, "positions", f"{video_name}_position.json")
         snap_output = os.path.join(base_dir, "snap_detection", f"{video_name}_snap_detection.json")
         yard_marker_output = os.path.join(base_dir, "yard_markers", f"{video_name}_yard_markers.json")
@@ -312,8 +316,6 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             },
             {
                 "name": "Correspondence Points Generation",
-                "cmd": None,  # Will be set below
-                "env": None
             },
             {
                 "name": "Homography Transformation",

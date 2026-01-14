@@ -580,12 +580,6 @@ class ProcessingWorker(QThread):
                         "--position-detections", self.detection_output,
                         "--correspondence-points", correspondence_file,
                         "--output", self.homography_output
-                    )
-                    if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
-                        homography_cmd, cmd_env, _ = cmd_result
-                    else:
-                        homography_cmd = cmd_result
-                        cmd_env = None
                 
                     if self.is_cancelled:
                         return

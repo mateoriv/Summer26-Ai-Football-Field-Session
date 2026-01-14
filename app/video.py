@@ -1272,8 +1272,8 @@ def load_and_set_detection_data(parent, data_type):
     
     # Logic for determining the folder name based on data_type
     if data_type == "positions":
-        data_folder_name = "players"
-        file_suffix = "_detection"
+        data_folder_name = "positions"
+        file_suffix = "_position"
     elif data_type == "yard_markers":
         data_folder_name = "yard_markers"
         file_suffix = "_yard_markers"
