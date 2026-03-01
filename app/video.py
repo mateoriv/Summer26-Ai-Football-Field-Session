@@ -9,6 +9,7 @@ import json
 import os
 import cv2
 import numpy as np
+import pandas as pd
 from fileAccess import get_cache_dir
 
 # Define colors for specific position labels
@@ -120,6 +121,9 @@ class CustomVideoWidget(QWidget):
         self.current_frame = 0
         self.show_boxes = False
         self.show_yard_marker_boxes = False
+        self.show_offense_selection = False
+        self.offense_selection_frame = None
+        self.offense_selection_points = []
         self.overlay_items = []
         self.cap = None
         self.total_frames = 0
@@ -138,9 +142,9 @@ class CustomVideoWidget(QWidget):
         """
         self.position_detection_data = data
         if data is None:
-            print("Position detection data cleared - no bounding boxes will be shown")
+            print("Player detection data cleared - no bounding boxes will be shown")
         if data and 'frames' in data:
-            print(f"   Total position frames: {len(data['frames'])}")
+            print(f"   Total player detection frames: {len(data['frames'])}")
         self.update()
     
     def set_show_boxes(self, show):
@@ -151,6 +155,17 @@ class CustomVideoWidget(QWidget):
     def set_show_yard_marker_boxes(self, show):
         """Set whether to show yard marker bounding boxes."""
         self.show_yard_marker_boxes = show
+        self.update()
+
+    def set_offense_selection(self, frame_number, points):
+        """Store which frame and points correspond to the selected 11 offensive players."""
+        self.offense_selection_frame = frame_number
+        self.offense_selection_points = points or []
+        self.update()
+
+    def set_show_offense_selection(self, show):
+        """Toggle highlighting of the selected 11 offensive players at the snap frame."""
+        self.show_offense_selection = show
         self.update()
     
     def update_frame(self):
@@ -218,8 +233,29 @@ class CustomVideoWidget(QWidget):
                 x_offset = (self.width() - scaled_pixmap.width()) // 2
                 y_offset = (self.height() - scaled_pixmap.height()) // 2
                 painter.drawPixmap(x_offset, y_offset, scaled_pixmap)
-                
-                
+
+                # If offense selection is enabled, draw small markers at the selected points
+                if getattr(self, "show_offense_selection", False) and self.offense_selection_points:
+                    # Determine base video resolution (prefer detection metadata, fall back to frame size)
+                    base_video_width = width
+                    base_video_height = height
+                    if self.position_detection_data and "video_info" in self.position_detection_data:
+                        vinfo = self.position_detection_data["video_info"]
+                        base_video_width = vinfo.get("width", base_video_width)
+                        base_video_height = vinfo.get("height", base_video_height)
+
+                    if base_video_width and base_video_height:
+                        scale_off_x = scaled_pixmap.width() / base_video_width
+                        scale_off_y = scaled_pixmap.height() / base_video_height
+
+                        marker_radius = 8
+                        painter.setPen(QPen(QColor(255, 255, 0), 2))
+                        painter.setBrush(Qt.NoBrush)
+                        for px, py in self.offense_selection_points:
+                            sx = int(px * scale_off_x) + x_offset - marker_radius
+                            sy = int(py * scale_off_y) + y_offset - marker_radius
+                            painter.drawRect(sx, sy, marker_radius * 2, marker_radius * 2)
+
                 # Define data sources to draw
                 video_data_sources = []
                 if self.show_boxes and self.position_detection_data:
@@ -309,7 +345,24 @@ class CustomVideoWidget(QWidget):
         class_name = detection.get('class', 'player')
         if class_name in YARD_MARKERS:
             class_name = "yard_marker"
+
+        # Default box color
         box_color = POSITION_COLORS.get(class_name.lower(), POSITION_COLORS['player'])
+
+        # Optionally highlight boxes that are part of the selected 11 offensive players
+        if getattr(self, "show_offense_selection", False) and self.offense_selection_points:
+            # Highlight boxes whose centers are close to the selected offense points,
+            # on all frames (even though the selection was computed at the snap).
+            cx = bbox.get('center_x', (x1 + x2) / 2.0)
+            cy = bbox.get('center_y', (y1 + y2) / 2.0)
+            tol = 10.0  # pixels
+            tol_sq = tol * tol
+            for px, py in self.offense_selection_points:
+                dx = px - cx
+                dy = py - cy
+                if dx * dx + dy * dy <= tol_sq:
+                    box_color = QColor(255, 255, 0)  # bright yellow highlight
+                    break
        
         # Draw bounding box
         painter.setPen(QPen(box_color, 3))
@@ -809,7 +862,35 @@ def create_video_title_bar(dock):
     """)
     yard_marker_checkbox.clicked.connect(lambda: toggle_bounding_boxes(dock.parent(), yard_marker_checkbox))
     layout.addWidget(yard_marker_checkbox)
-    
+
+    # Offense selection highlight toggle
+    offense_button = QPushButton("Static Offense")
+    offense_button.setFixedSize(90, 20)
+    offense_button.setCheckable(True)
+    offense_button.setChecked(False)
+    offense_button.setToolTip("Highlight the 11 offensive players used for training at the snap frame")
+    offense_button.setStyleSheet("""
+        QPushButton {
+            background-color: transparent;
+            border: none;
+            color: white;
+            padding: 4px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: #404040;
+        }
+        QPushButton:pressed {
+            background-color: #505050;
+        }
+        QPushButton:checked {
+            background-color: #ffa500;
+        }
+    """)
+    offense_button.clicked.connect(lambda: toggle_offense_selection(dock.parent(), offense_button))
+    layout.addWidget(offense_button)
+
     # Legend toggle button
     legend_checkbox = QPushButton("Legend")
     legend_checkbox.setFixedSize(50, 20)
@@ -1093,7 +1174,7 @@ def set_current_video_path(parent, video_path):
     
     load_video_for_custom_widget(parent, video_path)
     
-    load_and_set_detection_data(parent, "positions") 
+    load_and_set_detection_data(parent, "players") 
     load_and_set_detection_data(parent, "yard_markers")
     
     # Load snap detection data for timeline markers
@@ -1115,13 +1196,76 @@ def set_current_video_path(parent, video_path):
     if hasattr(parent, 'custom_video'):
         parent.custom_video.set_show_boxes(parent.show_bounding_boxes)
         parent.custom_video.set_show_yard_marker_boxes(parent.show_yard_marker_boxes)
+        # If offense selection highlight is enabled, recompute it for the new video
+        if getattr(parent.custom_video, "show_offense_selection", False):
+            _compute_offense_selection_for_current_video(parent)
+
+
+def _compute_offense_selection_for_current_video(parent):
+    """
+    Load the 11 offensive player points for the current video from the
+    precomputed offense_positions.csv built by CNN/build_offense_positions_dataset.py.
+    """
+    try:
+        if not hasattr(parent, "current_video_path") or not parent.current_video_path:
+            print("[OFFENSE SELECTION] No current video path set.")
+            return False
+        if not hasattr(parent, "current_folder") or not parent.current_folder:
+            print("[OFFENSE SELECTION] No current folder set.")
+            return False
+
+        video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
+        folder_name = os.path.basename(parent.current_folder.rstrip("/\\"))
+        base_cache_dir = get_cache_dir()
+
+        offense_csv_path = os.path.join(base_cache_dir, folder_name, "offense_positions.csv")
+        if not os.path.exists(offense_csv_path):
+            print(f"[OFFENSE SELECTION] offense_positions.csv not found at {offense_csv_path}")
+            return False
+
+        df = pd.read_csv(offense_csv_path)
+        if "clip_name" not in df.columns:
+            print("[OFFENSE SELECTION] 'clip_name' column missing in offense_positions.csv")
+            return False
+
+        # Find the row for this video
+        row = df.loc[df["clip_name"] == video_name]
+        if row.empty:
+            print(f"[OFFENSE SELECTION] No offense row found for clip_name '{video_name}'")
+            return False
+
+        row = row.iloc[0]
+        points = []
+        for i in range(1, 12):
+            x_col = f"ox{i}"
+            y_col = f"oy{i}"
+            if x_col in row and y_col in row:
+                x_val = row[x_col]
+                y_val = row[y_col]
+                if pd.notna(x_val) and pd.notna(y_val):
+                    points.append((float(x_val), float(y_val)))
+
+        if len(points) < 1:
+            print(f"[OFFENSE SELECTION] No valid offense points for '{video_name}' in offense_positions.csv")
+            return False
+
+        if hasattr(parent, "custom_video"):
+            # Frame index is not critical anymore; markers are drawn on all frames.
+            parent.custom_video.set_offense_selection(0, points)
+            print(f"[OFFENSE SELECTION] Loaded offense selection for {video_name} from offense_positions.csv")
+            return True
+
+        return False
+    except Exception as e:
+        print(f"[OFFENSE SELECTION] Error loading offense selection from CSV: {e}")
+        return False
 
 def toggle_bounding_boxes(parent, button):
     """Toggle bounding box visibility on the custom video widget"""
     # Determine box type from button text 
     button_text = button.text().lower()
     if "player" in button_text:
-        box_type = "positions" 
+        box_type = "players" 
     elif "yard" in button_text:
         box_type = "yard_markers"
     else:
@@ -1129,10 +1273,10 @@ def toggle_bounding_boxes(parent, button):
         return
     
     # Set up state variables based on box type
-    if box_type == "positions":
+    if box_type == "players":
         state_attr = "show_bounding_boxes"
-        display_name = "Position Bounding boxes"
-        data_type = "positions"
+        display_name = "Player Bounding boxes"
+        data_type = "players"
         setter_method = "set_show_boxes"
     elif box_type == "yard_markers":
         state_attr = "show_yard_marker_boxes"
@@ -1160,12 +1304,29 @@ def toggle_bounding_boxes(parent, button):
         if is_enabled:
             print(f"{display_name}: ON")
             load_and_set_detection_data(parent, data_type)
-            if box_type == "positions":
+            if box_type == "players":
                 custom_video.force_update()
         else:
             print(f"{display_name}: OFF")
     else:
         print("No custom video widget found!")
+
+
+def toggle_offense_selection(parent, button):
+    """Toggle highlight of the 11 offensive players at the snap frame."""
+    if not hasattr(parent, "custom_video"):
+        print("No custom video widget found!")
+        return
+
+    if button.isChecked():
+        # Compute selection for current video
+        ok = _compute_offense_selection_for_current_video(parent)
+        if not ok:
+            button.setChecked(False)
+            return
+        parent.custom_video.set_show_offense_selection(True)
+    else:
+        parent.custom_video.set_show_offense_selection(False)
 
 def toggle_yard_marker_boxes(parent, button):
     """Toggle yard marker bounding box visibility - wrapper for unified function"""
@@ -1260,7 +1421,7 @@ def toggle_legend(parent, button=None):
 
 def load_and_set_detection_data(parent, data_type):
     """
-    [UNIFIED] Load detection data for a specified data type ("positions" or "yard_markers") 
+    [UNIFIED] Load detection data for a specified data type ("players" or "yard_markers") 
     and set it in the video widget.
     """
     if not hasattr(parent, 'current_video_path') or not parent.current_video_path:
@@ -1271,9 +1432,9 @@ def load_and_set_detection_data(parent, data_type):
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     
     # Logic for determining the folder name based on data_type
-    if data_type == "positions":
-        data_folder_name = "positions"
-        file_suffix = "_position"
+    if data_type == "players":
+        data_folder_name = "players"
+        file_suffix = "_detection"
     elif data_type == "yard_markers":
         data_folder_name = "yard_markers"
         file_suffix = "_yard_markers"
@@ -1295,7 +1456,7 @@ def load_and_set_detection_data(parent, data_type):
             print(f"Loaded {data_type} data from {os.path.basename(detection_file)}: {len(data.get('frames', []))} frames")
             
             if hasattr(parent, 'custom_video'):
-                if data_type == "positions":
+                if data_type == "players":
                     parent.custom_video.set_detection_data(data)
                 elif data_type == "yard_markers":
                     parent.custom_video.yard_marker_data = data
@@ -1306,23 +1467,18 @@ def load_and_set_detection_data(parent, data_type):
         except Exception as e:
             print(f"Error loading {data_type} data: {e}")
             if hasattr(parent, 'custom_video'):
-                if data_type == "positions":
+                if data_type == "players":
                     parent.custom_video.set_detection_data(None)
                 elif data_type == "yard_markers":
                     parent.custom_video.yard_marker_data = None
     else:
-        # FALLBACK: If position data is missing, try to load generic player detection data
-        if data_type == "positions":
-            print(f"Position file not found at {detection_file}. Falling back to generic player detection.")
-            load_and_set_detection_data_fallback(parent)
-        else:
-            print(f"{data_type.capitalize()} file not found: {detection_file}")
-            if hasattr(parent, 'custom_video'):
-                if data_type == "positions":
-                    parent.custom_video.set_detection_data(None)
-                    parent.custom_video.set_show_boxes(False)
-                elif data_type == "yard_markers":
-                    parent.custom_video.yard_marker_data = None
+        print(f"{data_type.capitalize()} file not found: {detection_file}")
+        if hasattr(parent, 'custom_video'):
+            if data_type == "players":
+                parent.custom_video.set_detection_data(None)
+                parent.custom_video.set_show_boxes(False)
+            elif data_type == "yard_markers":
+                parent.custom_video.yard_marker_data = None
 
 def load_and_set_detection_data_fallback(parent):
     """

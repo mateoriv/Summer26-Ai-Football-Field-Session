@@ -212,12 +212,12 @@ class ProcessingWorker(QThread):
         if step_index == 0:  # Player Detection
             detection_file = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
             return os.path.exists(detection_file)
-        elif step_index == 1: # Position Detection
-            position_file = f"{self.output_dir}/{self.video_folder}/positions/{self.video_name}_position.json"
-            return os.path.exists(position_file)
-        elif step_index == 2:  # Snap Detection
+        elif step_index == 1:  # Snap Detection
             snap_file = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
             return os.path.exists(snap_file)
+        elif step_index == 2: # Position Detection
+            position_file = f"{self.output_dir}/{self.video_folder}/positions/{self.video_name}_position.json"
+            return os.path.exists(position_file)
         elif step_index == 3:  # Yard Marker Detection
             yard_marker_file = f"{self.output_dir}/{self.video_folder}/yard_markers/{self.video_name}_yard_markers.json"
             return os.path.exists(yard_marker_file)
@@ -363,8 +363,8 @@ class ProcessingWorker(QThread):
                     self.step_completed.emit("Player Detection", False)
                     
             elif self.current_step == 1:
-                # Step 2: Position Detection
-                step_name = "Position Detection"
+                # Step 2: Snap Detection
+                step_name = "Snap Detection"
                 self.output_received.emit(f"Step 2: Checking {step_name}...")
                 
                 # Check if step is already completed
@@ -382,52 +382,8 @@ class ProcessingWorker(QThread):
                     else:  # rerun
                         self.output_received.emit(f"Re-running {step_name}...")
                 
-                self.progress_updated.emit(0, "Step 2: Initializing position detection...")
-                self.output_received.emit("Step 2: Running position detection...")
-                
-                
-                cmd_result = build_script_command(
-                    get_resource_path("scripts", "positionDetection.py"),
-                    "--video", self.video_path,
-                    "--output", self.position_output
-                )
-                if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
-                    position_cmd, cmd_env, _ = cmd_result
-                else:
-                    position_cmd = cmd_result
-                    cmd_env = None
-                
-                if self.is_cancelled:
-                    return
-                    
-                result = self._run_command(position_cmd, "Position Detection", 0, 100, env=cmd_env)
-                if result:
-                    self.step_completed.emit("Position Detection", True)
-                else:
-                    self.step_completed.emit("Position Detection", False)
-                    
-            elif self.current_step == 2:
-                # Step 3: Snap Detection
-                step_name = "Snap Detection"
-                self.output_received.emit(f"Step 3: Checking {step_name}...")
-                
-                # Check if step is already completed
-                if self.check_step_completed(2):
-                    self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 2)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name} - using existing results")
-                        self.step_completed.emit(step_name, True)
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
-                
-                self.progress_updated.emit(0, "Step 3: Initializing snap detection...")
-                self.output_received.emit("Step 3: Running snap detection...")
+                self.progress_updated.emit(0, "Step 2: Initializing snap detection...")
+                self.output_received.emit("Step 2: Running snap detection...")
                 
                 cmd_result = build_script_command(
                     get_resource_path("scripts", "snapDetection.py"),
@@ -448,6 +404,60 @@ class ProcessingWorker(QThread):
                     self.step_completed.emit("Snap Detection", True)
                 else:
                     self.step_completed.emit("Snap Detection", False)
+                    
+            elif self.current_step == 2:
+                # Step 3: Position Detection (using snap frame)
+                step_name = "Position Detection"
+                self.output_received.emit(f"Step 3: Checking {step_name}...")
+                
+                # Check if step is already completed
+                if self.check_step_completed(2):
+                    self.output_received.emit(f"✓ {step_name} already completed!")
+                    user_choice = self.ask_user_skip_step(step_name, 2)
+                    
+                    if user_choice == "cancel":
+                        self.processing_failed.emit("Processing cancelled by user")
+                        return
+                    elif user_choice == "skip":
+                        self.output_received.emit(f"Skipping {step_name} - using existing results")
+                        self.step_completed.emit(step_name, True)
+                        return
+                    else:  # rerun
+                        self.output_received.emit(f"Re-running {step_name}...")
+                
+                self.progress_updated.emit(0, "Step 3: Initializing position detection...")
+                self.output_received.emit("Step 3: Running position detection on snap frame...")
+                
+                # Snap detection should exist at this point since it runs before position detection
+                snap_detection_path = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
+                position_cmd_args = [
+                    get_resource_path("scripts", "positionDetection.py"),
+                    "--video", self.video_path,
+                    "--output", self.position_output
+                ]
+                
+                # Always use snap detection for position detection (it should exist at this point)
+                if os.path.exists(snap_detection_path):
+                    self.output_received.emit(f"Using snap frame from snap detection")
+                    position_cmd_args.extend(["--snap-detection", snap_detection_path])
+                else:
+                    self.output_received.emit(f"WARNING: Snap detection file not found, but position detection requires it. Processing may fail.")
+                
+                cmd_result = build_script_command(*position_cmd_args)
+                if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+                    position_cmd, cmd_env, _ = cmd_result
+                else:
+                    position_cmd = cmd_result
+                    cmd_env = None
+                
+                if self.is_cancelled:
+                    return
+                    
+                result = self._run_command(position_cmd, "Position Detection", 0, 100, env=cmd_env)
+                if result:
+                    self.step_completed.emit("Position Detection", True)
+                else:
+                    self.step_completed.emit("Position Detection", False)
                     
             elif self.current_step == 3:
                 # Step 4: Yard Marker Detection
@@ -956,8 +966,8 @@ class ProcessingDialog(QDialog):
         self.current_step = 0
         self.step_names = [
             "Player Detection", 
-            "Position Detection",
             "Snap Detection", 
+            "Position Detection",
             "Yard Marker Detection", 
             "Correspondence Points Generation", 
             "Homography Transformation", 

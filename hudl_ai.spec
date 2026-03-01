@@ -15,7 +15,6 @@ and in subprocess scripts.
 
 import os
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 block_cipher = None
 
@@ -41,27 +40,49 @@ def collect_directory(src_root: str, target_prefix: str):
     return collected
 
 # Bundle project asset directories (plus app modules for subprocess access).
+# Exclude CNN/nfl-big-data-bowl-2026-prediction as it's not part of the main app
 asset_dirs = ["app", "scripts", "yolo_models", "cache", "CNN"]
 asset_datas = []
 for rel_path in asset_dirs:
     src_path = os.path.join(PROJECT_ROOT, rel_path)
     if os.path.exists(src_path):
-        asset_datas.extend(collect_directory(src_path, rel_path))
+        # For CNN directory, exclude the nfl-big-data-bowl-2026-prediction subdirectory
+        if rel_path == "CNN":
+            for root, dirs, files in os.walk(src_path):
+                # Skip nfl-big-data-bowl-2026-prediction directory
+                if 'nfl-big-data-bowl-2026-prediction' in dirs:
+                    dirs.remove('nfl-big-data-bowl-2026-prediction')
+                rel_dir = os.path.relpath(root, src_path)
+                if rel_dir == ".":
+                    rel_dir = ""
+                dest_dir = os.path.join(rel_path, rel_dir) if rel_dir else rel_path
+                for filename in files:
+                    src_file = os.path.join(root, filename)
+                    asset_datas.append((src_file, dest_dir))
+        else:
+            asset_datas.extend(collect_directory(src_path, rel_path))
 
 datas = asset_datas
 binaries = []
-hiddenimports = ["darkdetect", "cv2", "numpy"]
+# Minimal hiddenimports - PyInstaller will auto-detect most imports from script analysis
+hiddenimports = ["darkdetect", "cv2", "numpy", "ultralytics", "ultralytics.models", "ultralytics.utils", "torch"]
 
-# Collect all dependencies from packages used in scripts
-# This ensures PyInstaller includes all submodules and dependencies
-ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all("ultralytics")
-torch_datas, torch_binaries, torch_hiddenimports = collect_all("torch")
-cv2_datas, cv2_binaries, cv2_hiddenimports = collect_all("cv2")
-
-# Merge collected data
-datas += ultralytics_datas + torch_datas + cv2_datas
-binaries += ultralytics_binaries + torch_binaries + cv2_binaries
-hiddenimports += ultralytics_hiddenimports + torch_hiddenimports + cv2_hiddenimports
+# Exclude unused libraries and submodules to reduce executable size
+# PyInstaller will automatically detect needed imports from the scripts,
+# so we don't need collect_all() which bundles everything
+excludes = [
+    # Unused libraries
+    "scipy",
+    "sympy", 
+    "networkx",
+    "mpmath",
+    "polars",
+    "polars_runtime_32",
+    "requests",
+    "psutil",
+    "pkg_resources.py2_warn",  # Suppress deprecation warnings
+    
+]
 
 # Add script files to be analyzed (so PyInstaller detects their imports)
 script_files = [
@@ -89,7 +110,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

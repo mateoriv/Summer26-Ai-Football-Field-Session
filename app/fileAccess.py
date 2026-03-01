@@ -233,8 +233,10 @@ def auto_load_folder_content(parent, folder_path):
         # Find all CSV files in the cache directory
         csv_files = []
         if os.path.exists(cache_dir):
-            csv_files = [f for f in os.listdir(cache_dir) 
-                        if f.lower().endswith('.csv') and os.path.isfile(os.path.join(cache_dir, f))]
+            csv_files = [
+                f for f in os.listdir(cache_dir)
+                if f.lower().endswith('.csv') and os.path.isfile(os.path.join(cache_dir, f))
+            ]
         
         # Find all video files in the video folder
         video_files = [f for f in os.listdir(folder_path) 
@@ -248,9 +250,19 @@ def auto_load_folder_content(parent, folder_path):
                 csv_files = [os.path.basename(csv_path)]
                 print(f"Created new CSV with video titles: {csv_path}")
         
-        # Load first CSV if available (from cache directory)
+       # Load primary metadata CSV if available (from cache directory).
+        # Prefer the folder's *_data.csv (labels, clip info), not training CSVs
+        # like offense_positions.csv.
         if csv_files and hasattr(parent, 'load_csv_file'):
-            first_csv = os.path.join(cache_dir, csv_files[0])
+            preferred_name = f"{folder_name}_data.csv"
+            chosen = None
+            if preferred_name in csv_files:
+                chosen = preferred_name
+            else:
+                # Fallback: first CSV in sorted order
+                chosen = sorted(csv_files)[0]
+
+            first_csv = os.path.join(cache_dir, chosen)
             if os.path.exists(first_csv):
                 parent.load_csv_file(first_csv)
                 print(f"Loaded CSV: {os.path.abspath(first_csv)}")

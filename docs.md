@@ -84,4 +84,16 @@ git lfs pull
 - **Bounding boxes not showing**: Ensure the YOLO JSON files exist in `cache/<folder-name>/players` and toggle the UI buttons to enable overlays.
 - **Virtual field empty**: Verify homography results are present under `cache/<folder-name>/homography`.
 
+## Training Model
+To train the model, batch process a folder with footage in the application, Then run the following commands, replacing arguments appropriately.
+  -TestingFootage is the folder footage to analyze, will use procesed data from application stored in cache
+  -TestingFootage.csv is the label data from Hudl
+  -offense_positions.csv is output dataset for model training
+
+
+```bash
+python CNN/build_offense_positions_dataset.py --folder-name "TestingFootage" --csv-path "FootballFootage/TestingFootage.csv"
+python .\CNN\train_offense_positions.py --csv-path .\cache\TestingFootage\offense_positions.csv
+```
+
 Questions or gaps? Add clarifying notes directly in the relevant `docs.md` file so future runs are smoother.

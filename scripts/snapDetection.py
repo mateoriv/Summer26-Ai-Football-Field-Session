@@ -194,9 +194,12 @@ def detect_snaps(velocities, fps,
             # Slightly favor earlier detection
             confidence = calm_score + gradient_score * 3 + jump_score + future_score + early_bonus * 0.4
             
+            #Offset by 1 second to ensure early rather than late detection of snap
+            index_w_offset = max (i - fps, 0)
+
             snap_candidates.append({
-                'frame': int(i), 
-                'time': i / fps,
+                'frame': int(index_w_offset), 
+                'time': index_w_offset / fps,
                 'confidence': confidence,
                 'pre_calm': pre_calm,
                 'current_vel': current_vel,

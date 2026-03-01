@@ -261,17 +261,6 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             player_env = None
         
         cmd_result = build_script_command(
-            get_resource_path("scripts", "positionDetection.py"),
-            "--video", video_path,
-            "--output", position_output
-        )
-        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
-            position_cmd, position_env, _ = cmd_result
-        else:
-            position_cmd = cmd_result
-            position_env = None
-        
-        cmd_result = build_script_command(
             get_resource_path("scripts", "snapDetection.py"),
             "--player-detections", detection_output,
             "--output", snap_output
@@ -281,6 +270,20 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
         else:
             snap_cmd = cmd_result
             snap_env = None
+        
+        # Position detection now uses snap detection, so build command with snap detection path
+        position_cmd_args = [
+            get_resource_path("scripts", "positionDetection.py"),
+            "--video", video_path,
+            "--output", position_output,
+            "--snap-detection", snap_output
+        ]
+        cmd_result = build_script_command(*position_cmd_args)
+        if isinstance(cmd_result, tuple) and len(cmd_result) == 3:
+            position_cmd, position_env, _ = cmd_result
+        else:
+            position_cmd = cmd_result
+            position_env = None
         
         cmd_result = build_script_command(
             get_resource_path("scripts", "yardMarkerDetection.py"),
@@ -300,14 +303,15 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
                 "env": player_env
             },
             {
-                "name": "Position Detection",
-                "cmd": position_cmd,
-                "env": position_env
-            },
-            {
                 "name": "Snap Detection",
                 "cmd": snap_cmd,
                 "env": snap_env
+            },
+            {
+                "name": "Position Detection",
+                "cmd": position_cmd,
+                "env": position_env,
+                "prereq": [snap_output]  # Position detection requires snap detection
             },
             {
                 "name": "Yard Marker Detection",
