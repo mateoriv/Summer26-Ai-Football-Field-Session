@@ -95,16 +95,18 @@ class PositionsDataset(Dataset):
 
         # Extract features
         features = df[self.feature_cols].to_numpy(dtype=np.float32)
+        
+        # NORMALIZE FEATURES
+        coords = features.reshape(-1, 11, 2)
 
-        # Optional normalization (per-feature standardization)
-        if normalize:
-            self.mean = features.mean(axis=0, keepdims=True)
-            self.std = features.std(axis=0, keepdims=True)
-            self.std[self.std == 0.0] = 1.0
-            features = (features - self.mean) / self.std
-        else:
-            self.mean = None
-            self.std = None
+        # 1. Center
+        centroid = coords.mean(axis=1, keepdims=True)
+        coords = coords - centroid
+        
+        # 2. Flatten back
+        features = coords.reshape(-1, 22)
+        self.mean = None
+        self.std = None
 
         self.features = torch.from_numpy(features)
 
@@ -245,7 +247,7 @@ def save_artifacts(
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
-    model_path = os.path.join(output_dir, "model.pt")
+    model_path = os.path.join(output_dir, "formModel.pt")
     torch.save(model.state_dict(), model_path)
 
     metadata = {
@@ -315,7 +317,7 @@ def parse_args() -> argparse.Namespace:
         "--hidden-dims",
         type=int,
         nargs="*",
-        default=[32, 16],
+        default=[64, 32],
         help="Hidden layer sizes for the MLP.",
     )
     parser.add_argument(
@@ -425,26 +427,34 @@ def main() -> None:
     if val_loader is None:
         save_artifacts(model, args.output_dir, dataset, args)
 
-    # ----- Final evaluation on full dataset: per-clip actual vs predicted -----
-    full_loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-    )
+    # ----- Per-clip actual vs predicted: use validation set if present, else full set -----
+    if val_loader is not None:
+        eval_loader = val_loader
+        val_indices = val_dataset.indices  # original dataset indices for validation samples
+        clip_names = [dataset.clip_names[i] for i in val_indices]
+    else:
+        eval_loader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+        )
+        clip_names = getattr(dataset, "clip_names", [str(i) for i in range(len(dataset))])
 
     model.eval()
     all_true: List[int] = []
     all_pred: List[int] = []
+    all_confidence: List[float] = []
     with torch.no_grad():
-        for inputs, targets in full_loader:
+        for inputs, targets in eval_loader:
             inputs = inputs.to(device)
             outputs = model(inputs)
             probs = torch.softmax(outputs, dim=1)
-            pred_ids = probs.argmax(dim=1).cpu().numpy()
-            all_pred.extend(int(p) for p in pred_ids)
+            pred_ids = probs.argmax(dim=1)
+            confidences = probs.gather(1, pred_ids.unsqueeze(1)).squeeze(1).cpu().numpy()
+            all_pred.extend(int(p) for p in pred_ids.cpu().numpy())
             all_true.extend(int(t) for t in targets.cpu().numpy())
+            all_confidence.extend(float(c) for c in confidences)
 
-    clip_names = getattr(dataset, "clip_names", [str(i) for i in range(len(all_true))])
     actual_labels: List[str] = []
     predicted_labels: List[str] = []
     for t_idx, p_idx in zip(all_true, all_pred):
@@ -455,6 +465,7 @@ def main() -> None:
         {
             "actual_play": actual_labels,
             "predicted_play": predicted_labels,
+            "confidence": all_confidence[: len(actual_labels)],
         },
         index=clip_names[: len(actual_labels)],
     )

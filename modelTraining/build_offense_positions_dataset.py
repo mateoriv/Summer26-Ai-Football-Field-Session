@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-
+import numpy as np
 # Position classes we treat as offense (not defense, not ref)
 OFFENSE_CLASSES = frozenset({
     "quarterback", "qb", "running_back", "rb", "wide_receiver", "wr",
@@ -137,12 +137,26 @@ def take_first_11_on_side(detections: list, side: str, image_width: float) -> li
         oy = det["original_bbox"]["center_y"]
         if ox is None or oy is None or nx is None or ny is None:
             continue
-        points.append((float(nx), float(ny), float(ox), float(oy)))
+        points.append([float(nx), float(ny), float(ox), float(oy)])
     if not points:
         return []
     # Order purely along the x-axis on that side
     points.sort(key=lambda p: p[0])
-    return points[:11] if side == "left" else points[-11:]
+    points = points[:11] if side == "left" else points[-11:]
+    points.sort(key=lambda p: p[1])
+
+    #Normalize attack from the left side to the right side
+    if side == "right":
+        x_min = []
+        #Find Min x value
+        for point in points:
+            x_min.append(point[0])
+        x_min_val = np.array(x_min).min()
+        #Subtract 2 distance from LOS from all x values
+        for point in points:
+            dist = point[0] - x_min_val
+            point[0] = float(point[0] - 2*dist)
+    return points
 
 
 def load_folder_csv(
@@ -183,7 +197,6 @@ def get_label_for_clip(
         return None
     for _, row in df.iterrows():
         clip_raw = str(row.get("CLIP NAME", "")).strip()
-        print(clip_raw)
         # Normalize CSV clip name: drop any path and file extension
         clip_base = os.path.basename(clip_raw)
         clip_stem = os.path.splitext(clip_base)[0]

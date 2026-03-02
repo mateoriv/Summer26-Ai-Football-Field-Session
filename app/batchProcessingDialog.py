@@ -176,12 +176,7 @@ def is_video_processed(video_path, video_folder, output_dir="cache"):
         
         # Check for all required files
         required_files = [
-            os.path.join(base_dir, "correspondence", f"{video_name}_correspondence.json"),
-            os.path.join(base_dir, "homography", f"{video_name}_normalized_positions.json"),
             os.path.join(base_dir, "players", f"{video_name}_detection.json"),
-            os.path.join(base_dir, "positions", f"{video_name}_position.json"),
-            os.path.join(base_dir, "snap_detection", f"{video_name}_snap_detection.json"),
-            os.path.join(base_dir, "yard_markers", f"{video_name}_yard_markers.json"),
         ]
         
         # All files must exist for video to be considered processed

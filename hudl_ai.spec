@@ -81,7 +81,8 @@ excludes = [
     "requests",
     "psutil",
     "pkg_resources.py2_warn",  # Suppress deprecation warnings
-    
+    # Project-local modules we don't want in the installer
+    "modelTraining",
 ]
 
 # Add script files to be analyzed (so PyInstaller detects their imports)
