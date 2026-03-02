@@ -86,14 +86,15 @@ git lfs pull
 
 ## Training Model
 To train the model, batch process a folder with footage in the application, Then run the following commands, replacing arguments appropriately.
-  -TestingFootage is the folder footage to analyze, will use procesed data from application stored in cache
-  -TestingFootage.csv is the label data from Hudl
-  -offense_positions.csv is output dataset for model training
+  - **TestingFootage** is the folder footage to analyze, will use procesed data from application stored in cache
+  - **TestingFootage.csv** is the label data from Hudl
+  - **offense_positions.csv** is output dataset for model training
 
 
 ```bash
-python CNN/build_offense_positions_dataset.py --folder-name "TestingFootage" --csv-path "FootballFootage/TestingFootage.csv"
-python .\CNN\train_offense_positions.py --csv-path .\cache\TestingFootage\offense_positions.csv
+python .\modelTraining\add_clip_names_to_csv.py --video-dir "FootballFootage/TestingFootage" --csv-path "FootballFootage/TestingFootage.csv" --column-name "CLIP NAME" 
+python .\modelTraining\build_offense_positions_dataset.py --folder-name "TestingFootage" --csv-path "FootballFootage/TestingFootage.csv"
+python .\modelTraining\train_offense_positions.py --csv-path ".\cache\TestingFootage\offense_positions.csv"
 ```
 
 Questions or gaps? Add clarifying notes directly in the relevant `docs.md` file so future runs are smoother.
