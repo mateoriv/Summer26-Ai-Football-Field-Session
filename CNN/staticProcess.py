@@ -14,7 +14,11 @@ import sys
 import argparse
 import pandas as pd
 import numpy as np
+import torch
+import torch.nn.functional as F
+from itertools import combinations
 
+FIELD_WIDTH_YD = 160/3 
 
 # --- Offense-11 extraction (same logic as build_offense_positions_dataset) ---
 
@@ -85,12 +89,13 @@ def get_normalized_positions_at_snap(homography_path, snap_frame):
     with open(homography_path, "r") as f:
         data = json.load(f)
     frames = data.get("normalized_positions") or {}
-    return frames.get(str(snap_frame)) or []
+    return frames.get(str(int(snap_frame))) or []
 
 
 def take_first_11_on_side(detections, side):
     """From homography detections (normalized_position, original_bbox), take first 11 on side by normalized x."""
     points = []
+
     for det in detections:
         npos = det.get("normalized_position") or {}
         bbox = det.get("original_bbox") or {}
@@ -135,19 +140,21 @@ def get_offense_points_for_video(video_name, folder_name, base_cache_dir):
 
     snap_frame = get_snap_frame(snap_path)
     if snap_frame is None:
-        return None, "No snap frame"
+        return None, "No snap frame", None
 
     position_detections, image_width = get_positions_at_snap(positions_path, snap_frame)
     offense_side = get_offense_side_from_positions(position_detections, image_width)
     if offense_side is None:
-        return None, "Could not determine offense side"
+        return None, "Could not determine offense side", None
 
     normalized = get_normalized_positions_at_snap(homography_path, snap_frame)
+    print(normalized)
     points = take_first_11_on_side(normalized, offense_side)
+    print(points)
     if len(points) < 11:
-        return None, f"Only {len(points)} players on offense side"
+        return None, f"Only {len(points)} players on offense side", None
 
-    return points, None
+    return points, offense_side, None
 
 
 def get_offense_features_for_video(video_name, folder_name, base_cache_dir):
@@ -155,7 +162,7 @@ def get_offense_features_for_video(video_name, folder_name, base_cache_dir):
     Returns (feature_vec_22, None) or (None, error_msg).
     Feature order matches the training CSV/metadata: nx1, ny1, nx2, ny2, ..., nx11, ny11.
     """
-    points, err = get_offense_points_for_video(video_name, folder_name, base_cache_dir)
+    points, _o_side, err = get_offense_points_for_video(video_name, folder_name, base_cache_dir)
     if points is None:
         return None, err
 
@@ -212,6 +219,90 @@ def _update_offense_positions_csv(base_cache_dir, folder_name, video_name, point
     out_df.to_csv(out_path, index=False)
     print(f"[INFO] Updated offense positions CSV: {out_path}")
 
+def extract_geometric_features(features: torch.Tensor) -> torch.Tensor:
+        # NORMALIZE FEATURES
+        if isinstance(features, np.ndarray):
+            features = torch.from_numpy(features)
+
+        features = features.float()
+        coords = features.reshape(-1, 11, 2)
+
+        # 1. Center (translation invariance)
+        centroid = coords.mean(axis=1, keepdims=True)
+        coords = coords - centroid
+        
+        B = coords.shape[0]
+
+        # -------------------------------------------------
+        # 1. Base Flattened Coordinates (11 * 2 = 22)
+        # -------------------------------------------------
+        base_features = coords.reshape(B, -1)
+
+        # -------------------------------------------------
+        # 2. Width & Depth (Span Features)
+        # -------------------------------------------------
+        x_max = torch.amax(coords[:, :, 0], dim=1)
+        x_min = torch.amin(coords[:, :, 0], dim=1)
+        x_span = x_max - x_min
+
+        y_max = torch.amax(coords[:, :, 1], dim=1)
+        y_min = torch.amin(coords[:, :, 1], dim=1)
+        y_span = y_max - y_min
+
+        span_features = torch.stack([x_span, y_span], dim=1)
+
+        # -------------------------------------------------
+        # 3. Mean Pairwise Distance
+        # -------------------------------------------------
+        pairwise_dists = []
+
+        for i, j in combinations(range(11), 2):
+            diff = coords[:, i] - coords[:, j]
+            dist = torch.norm(diff, dim=1)
+            pairwise_dists.append(dist)
+
+        pairwise_dists = torch.stack(pairwise_dists, dim=1)
+
+        mean_pairwise_distance = pairwise_dists.mean(dim=1, keepdim=True)
+
+        # -------------------------------------------------
+        # 4. Distance to Centroid Statistics
+        # -------------------------------------------------
+        d_to_centroid = torch.norm(coords - centroid, dim=2)
+
+        centroid_mean = d_to_centroid.mean(dim=1, keepdim=True)
+        centroid_std = d_to_centroid.std(dim=1, keepdim=True)
+
+        centroid_features = torch.cat([centroid_mean, centroid_std], dim=1)
+
+        # -------------------------------------------------
+        # 5. PCA Eigenvalues (Top 2)
+        # -------------------------------------------------
+        # Compute covariance matrix per batch
+        centered = coords - centroid
+        cov = torch.bmm(centered.transpose(1, 2), centered) / 11.0 + 1e-6 * torch.eye(2).to(coords.device)
+
+        eigvals = []
+
+        eigvals_all = torch.linalg.eigvalsh(cov)
+        eigvals_sorted = torch.sort(eigvals_all, dim=1).values
+        eigvals = eigvals_sorted[:, -2:]
+
+        # -------------------------------------------------
+        # Concatenate Everything
+        # -------------------------------------------------
+        features = torch.cat(
+            [
+                base_features,
+                span_features,
+                mean_pairwise_distance,
+                centroid_features,
+                eigvals,
+            ],
+            dim=1,
+        )
+
+        return features
 # --- Offense positions model inference (same architecture as train_offense_positions) ---
 
 def _predict_play(features_22, model_dir):
@@ -219,12 +310,6 @@ def _predict_play(features_22, model_dir):
     Load model + metadata from model_dir, normalize features, run forward pass.
     Returns (predicted_label_str, confidence_float) or (None, None) if model missing/invalid.
     """
-    print("predicting play")
-    try:
-        import torch
-    except ImportError:
-        print("[WARNING] torch not available, skipping offense positions model")
-        return None, None
 
     # Trainer writes "model.pt"; keep legacy fallback for older names.
     model_path = os.path.join(model_dir, "formModel.pt")
@@ -249,13 +334,7 @@ def _predict_play(features_22, model_dir):
     # Normalize
     
     x = np.array(features_22, dtype=np.float32).reshape(1, -1)
-    print("x", x)
-    if mean and std:
-        mean = np.array(mean, dtype=np.float32)
-        std = np.array(std, dtype=np.float32)
-        std[std == 0.0] = 1.0
-        x = (x - mean) / std
-    x = torch.from_numpy(x)
+    x = extract_geometric_features(x)
 
     # Minimal MLP matching trainer
     class PositionsNet(torch.nn.Module):
@@ -410,7 +489,6 @@ def get_player_data_for_frame(video_name, folder_name=None, cache_dir="cache", p
     if not results:
         print(f"[ERROR] No player data found for any snap frames")
         return None
-    
     return results
 
 
@@ -479,28 +557,20 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
         print(f"[INFO] Found video '{video_name}' at row {video_row_index}")
 
         # Extract x positions from player detections
-        detections = frame_data.get('detections', [])
+        
+        detections = frame_data[0].get('detections', [])
         x_positions = []
-
+        y_positions = []
         for detection in detections:
             normalized_pos = detection.get('normalized_position', {})
             x = normalized_pos.get('x')
+            y = normalized_pos.get('y')
             if x is not None:
                 x_positions.append(x)
+                y_positions.append(y)
 
-        # Calculate median x position and round to nearest integer
-        if x_positions:
-            median_x = np.median(x_positions)
-            yard_line = int(round(median_x))
-            print(f"[INFO] Calculated median x position: {median_x:.2f}, rounded to yard line: {yard_line}")
-
-            # Update CSV row with yard line
-            df.at[video_row_index, 'YARD LINE'] = yard_line
-        else:
-            print(f"[WARNING] No x positions found in detections, skipping yard line update")
-
-        # Update cache/<folder>/offense_positions.csv for this clip too
-        points_11, pts_err = get_offense_points_for_video(video_name, folder_name, base_cache_dir)
+        # Update cache/<folder>/offense_positions.csv for this clip; get offense_side for yard-line logic
+        points_11, o_side, pts_err = get_offense_points_for_video(video_name, folder_name, base_cache_dir)
         if points_11 is not None:
             # Use OFF FORM (if present) as the training label column in offense_positions.csv
             label_value = df.at[video_row_index, "OFF FORM"] if "OFF FORM" in df.columns else ""
@@ -515,15 +585,61 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
         if features is not None and os.path.isdir(model_dir):
             pred_label, confidence = _predict_play(features, model_dir)
             if pred_label is not None:
-                if "predicted_play" not in df.columns:
-                    df["predicted_play"] = ""
-                if "confidence" not in df.columns:
-                    df["confidence"] = np.nan
                 df.at[video_row_index, "OFF FORM"] = pred_label
                 df.at[video_row_index, "OFF FORM CONFIDENCE"] = confidence
                 print(f"[INFO] Offense positions model: predicted_play={pred_label}, confidence={confidence:.3f}")
         elif fe_err:
             print(f"[INFO] Offense model skipped: {fe_err}")
+
+        # Calculate median x position and round to nearest integer (use o_side from get_offense_points_for_video)
+        if x_positions:
+            median_x = np.median(x_positions)
+            yard_line = int(round(median_x))
+            print(f"[INFO] Calculated median x position: {median_x:.2f}, rounded to yard line: {yard_line}")
+
+            if o_side is not None:
+                if o_side == "left":
+                    if yard_line > 50:
+                        yard_line = yard_line
+                    else:
+                        yard_line = yard_line - 100
+                else:
+                    if yard_line > 50:
+                        yard_line = yard_line - 100
+                    else:
+                        yard_line = yard_line
+
+            # Update CSV row with yard line
+            df.at[video_row_index, 'YARD LINE'] = yard_line
+        else:
+            print(f"[WARNING] No x positions found in detections, skipping yard line update")
+
+        # Calculate Hash Side
+        if y_positions:
+           
+            median_y = np.median(y_positions)
+            top_hash = FIELD_WIDTH_YD/2 + 5
+            bottom_hash = FIELD_WIDTH_YD/2 - 5
+           
+            if o_side == "left":
+                if median_y > top_hash:
+                    hash_side = "L"
+                elif median_y < bottom_hash:
+                    hash_side = "M"
+                else:
+                    hash_side = "R"
+            else:
+                if median_y > top_hash:
+                    hash_side = "R"
+                elif median_y < bottom_hash:
+                    hash_side = "M"
+                else:
+                    hash_side = "L"
+         
+            df.at[video_row_index, 'HASH'] = hash_side
+        else:
+            print(f"[WARNING] No y positions found in detections, skipping hash side update")
+
 
         # Save the updated CSV
         df.to_csv(csv_file_path, index=False)

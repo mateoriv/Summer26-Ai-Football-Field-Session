@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
 """
-Snap Detection Script (Improved)
+Snap Detection Script
 
-Detects when the football is snapped by analyzing player movement patterns,
-accounting for camera motion and pre-snap movement.
+Detects the snap frame in a football play clip by finding the
+calm-to-burst transition in player motion.
 
-Input: player detection JSON file
-Output: JSON file with detected snap frames
+Handles the real-world events that can cause false positives:
+
+  Event                       How it's handled
+  --------------------------  -----------------------------------------------
+  Huddle break                Skip the first `--skip-start-seconds` of the clip
+  Men in motion (pre-snap)    Require calm for at least `--set-window-seconds`
+                              (longer than the smooth window)
+  Hard count / offsides move  Detect "spike then return" patterns and reject them
+  Camera pan / tilt           Remove median frame-level shift before computing
+                              per-player velocity
+  Referee walking             No class filter available; mitigated by requiring
+                              collective (multi-player) motion
+  Clustered duplicate frames  Deduplicate: keep only the best candidate per
+                              `--cluster-gap-seconds` window
+  Snap near end of clip       Hard cap at `--max-snap-fraction` of total frames
 """
 
 import json
@@ -14,264 +27,389 @@ import os
 import sys
 import argparse
 import numpy as np
+from scipy.spatial.distance import cdist
 
-def load_player_detections(detection_path):
-    """Load player detection JSON file"""
-    with open(detection_path, 'r') as f:
+
+# ------------------------------------------------------------------
+# I/O
+# ------------------------------------------------------------------
+
+def load_player_detections(path):
+    with open(path, "r") as f:
         return json.load(f)
+
+
+# ------------------------------------------------------------------
+# Player Matching
+# ------------------------------------------------------------------
+
+def match_players(prev_centers, curr_centers):
+    """
+    Nearest-neighbour matching between two sets of player centers.
+    Returns an (N, 2) array of displacement vectors for matched pairs.
+    """
+    if len(prev_centers) == 0 or len(curr_centers) == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+
+    dists = cdist(prev_centers, curr_centers)
+    used_curr = set()
+    deltas = []
+    for i in range(len(prev_centers)):
+        j = int(np.argmin(dists[i]))
+        if j in used_curr:
+            continue
+        used_curr.add(j)
+        deltas.append(curr_centers[j] - prev_centers[i])
+
+    return np.array(deltas, dtype=np.float32) if deltas else np.zeros((0, 2), dtype=np.float32)
+
+
+# ------------------------------------------------------------------
+# Velocity Computation
+# ------------------------------------------------------------------
 
 def compute_velocity(detections):
     """
-    Compute player velocities per frame, compensating for global (camera) motion.
-
     Returns:
-        corrected_velocities: np.array of global average velocities per frame
-        fps: frames per second
+        velocities       – per-frame scalar (camera-corrected, outlier-filtered)
+        mover_counts     – per-frame count of players whose corrected motion
+                           exceeds a small threshold (used for multi-player check)
+        fps
     """
-    fps = detections.get('video_info', {}).get('fps', 30.0)
-    frames = detections.get('frames', [])
-    if not frames:
-        return np.array([]), fps
+    fps = detections.get("video_info", {}).get("fps", 30.0)
+    frames = detections.get("frames", [])
 
-    prev_centers = {}
     velocities = []
-    prev_frame_centers = None
+    mover_counts = []
+    prev_centers = None
+    small_move_threshold = 1.5   # pixels; below this = "not really moving"
 
-    for frame_idx, frame_data in enumerate(frames):
-        frame_detections = frame_data.get('detections', [])
-        curr_centers = []
+    for frame in frames:
+        centers = []
+        for det in frame.get("detections", []):
+            bbox = det.get("bbox", {})
+            if "center_x" in bbox and "center_y" in bbox:
+                centers.append([bbox["center_x"], bbox["center_y"]])
 
-        for det in frame_detections:
-            bbox = det.get('bbox', {})
-            if 'center_x' in bbox and 'center_y' in bbox:
-                curr_centers.append((bbox['center_x'], bbox['center_y']))
+        centers = np.array(centers, dtype=np.float32)
 
-        curr_centers = np.array(curr_centers)
-        if len(curr_centers) == 0:
+        if prev_centers is None or len(prev_centers) == 0 or len(centers) == 0:
             velocities.append(0.0)
-            prev_frame_centers = curr_centers
+            mover_counts.append(0)
+            prev_centers = centers
             continue
 
-        # Estimate camera motion if we have previous frame
-        if prev_frame_centers is not None and len(prev_frame_centers) > 0:
-            # Match players roughly by nearest neighbors
-            min_len = min(len(curr_centers), len(prev_frame_centers))
-            deltas = curr_centers[:min_len] - prev_frame_centers[:min_len]
+        matched = match_players(prev_centers, centers)
 
-            # Estimate camera translation as median of all deltas
-            cam_shift = np.median(deltas, axis=0)
+        if len(matched) == 0:
+            velocities.append(0.0)
+            mover_counts.append(0)
+            prev_centers = centers
+            continue
 
-            # Subtract camera motion
-            motion_corrected = deltas - cam_shift
+        # Camera motion = median displacement across all matched players
+        cam_shift = np.median(matched, axis=0)
+        corrected = matched - cam_shift
 
-            # Prioritize horizontal motion (x-axis)
-            vertical_weight = 0.3
-            magnitudes = np.sqrt(motion_corrected[:, 0] ** 2 + (motion_corrected[:, 1] * vertical_weight) ** 2)
+        # Weight horizontal motion higher (football is primarily horizontal)
+        weights = np.array([1.0, 0.4])
+        magnitudes = np.linalg.norm(corrected * weights, axis=1)
 
-            # Remove outliers (single fast-moving players) before averaging
-            if len(magnitudes) > 2:
-                # Use IQR to identify outliers
-                q75 = np.percentile(magnitudes, 75)
-                q25 = np.percentile(magnitudes, 25)
-                iqr = q75 - q25
-                
-                # Remove velocities that are outliers (more than 1.5 * IQR above Q75)
-                # This filters out single fast-moving players while keeping scale similar
-                outlier_threshold = q75 + 1.5 * iqr if iqr > 0 else np.inf
-                filtered_magnitudes = magnitudes[magnitudes <= outlier_threshold]
-                
-                # Use mean of filtered values to maintain similar scale
-                # This preserves the velocity magnitude while removing outliers
-                if len(filtered_magnitudes) > 0:
-                    avg_velocity = np.mean(filtered_magnitudes)
-                else:
-                    # Fallback to median if all values filtered
-                    avg_velocity = np.median(magnitudes)
-            else:
-                avg_velocity = np.mean(magnitudes) if len(magnitudes) > 0 else 0.0
+        # Remove per-frame outliers (e.g. a single ref running across field)
+        if len(magnitudes) > 3:
+            q1, q3 = np.percentile(magnitudes, [25, 75])
+            iqr = q3 - q1
+            cap = q3 + 1.5 * iqr if iqr > 0 else np.inf
+            filtered = magnitudes[magnitudes <= cap]
+            avg_vel = np.mean(filtered) if len(filtered) > 0 else np.median(magnitudes)
         else:
-            avg_velocity = 0.0
+            avg_vel = float(np.mean(magnitudes))
 
-        velocities.append(avg_velocity)
-        prev_frame_centers = curr_centers
+        # Count how many players are genuinely moving (for multi-player check)
+        movers = int(np.sum(magnitudes > small_move_threshold))
 
-    return np.array(velocities), fps
+        velocities.append(avg_vel)
+        mover_counts.append(movers)
+        prev_centers = centers
 
-def detect_snaps(velocities, fps,
-                 calm_window=60, motion_window=45,
-                 calm_threshold=None, motion_threshold=None,
-                 gradient_threshold=None):
-    """
-    Detect snap moment as the transition from calm (low movement) to rapid motion.
-    Designed to detect at the START of motion, not after it's fully developed.
-    """
-    """
-    Detect snap moment as the transition from calm (low movement) to rapid motion.
+    return np.array(velocities, dtype=np.float32), np.array(mover_counts, dtype=np.int32), float(fps)
 
-    - Uses long averaging windows to smooth out pre-snap jitters.
-    - Detects large gradients in motion over time.
-    - Uses adaptive thresholds based on velocity distribution.
+
+# ------------------------------------------------------------------
+# Hard-Count / Offsides Detection
+# ------------------------------------------------------------------
+
+def build_hardcount_mask(smoothed, fps, threshold_mult=0.6, return_frames=8):
     """
-    if len(velocities) == 0:
+    Mark frames that follow a "spike-then-return" pattern as hard-count zones.
+    A spike that returns to calm within `return_frames` is NOT a snap.
+
+    Returns a boolean mask (True = likely hard count, do not call snap here).
+    """
+    motion_threshold = np.percentile(smoothed, 70) * threshold_mult
+    mask = np.zeros(len(smoothed), dtype=bool)
+
+    i = 0
+    while i < len(smoothed):
+        if smoothed[i] > motion_threshold:
+            # Find how long the spike lasts
+            j = i
+            while j < len(smoothed) and smoothed[j] > motion_threshold:
+                j += 1
+            spike_len = j - i
+            # If the spike is short and velocity returns to near-calm, it's a hard count
+            if spike_len < return_frames and j < len(smoothed):
+                after_calm = np.mean(smoothed[j:min(j + return_frames, len(smoothed))])
+                calm_base = np.percentile(smoothed, 30)
+                if after_calm < calm_base * 1.5:
+                    # Mark the spike and a small buffer around it
+                    buffer = return_frames
+                    mask[max(0, i - buffer):min(len(smoothed), j + buffer)] = True
+            i = j
+        else:
+            i += 1
+
+    return mask
+
+
+# ------------------------------------------------------------------
+# Candidate Deduplication
+# ------------------------------------------------------------------
+
+def cluster_candidates(candidates, gap_frames):
+    """
+    Keep only the highest-confidence candidate within each `gap_frames` window.
+    This collapses "frame 1058, 1059, 1060 all from the same snap" into one result.
+    """
+    if not candidates:
         return []
 
-    # Smooth velocity over time (longer window = more stable)
-    smooth_win = int(fps * 0.5)  # ~0.5s smoothing
-    smoothed = np.convolve(velocities, np.ones(smooth_win) / smooth_win, mode='same')
+    candidates = sorted(candidates, key=lambda c: c["frame"])
+    clusters = []
+    group = [candidates[0]]
 
-    # Calculate adaptive thresholds based on velocity distribution
-    if calm_threshold is None:
-        # Calm threshold: 30th percentile (below average movement)
-        calm_threshold = np.percentile(smoothed, 30)
-    if motion_threshold is None:
-        # Motion threshold: 70th percentile (above average movement)
-        motion_threshold = np.percentile(smoothed, 70)
-    if gradient_threshold is None:
-        # Gradient threshold: 75th percentile of gradient magnitude
-        grad_all = np.abs(np.gradient(smoothed))
-        gradient_threshold = np.percentile(grad_all, 75)
+    for c in candidates[1:]:
+        if c["frame"] - group[-1]["frame"] <= gap_frames:
+            group.append(c)
+        else:
+            clusters.append(max(group, key=lambda x: x["confidence"]))
+            group = [c]
+    clusters.append(max(group, key=lambda x: x["confidence"]))
 
-    print(f"[INFO] Adaptive thresholds: calm={calm_threshold:.2f}, motion={motion_threshold:.2f}, gradient={gradient_threshold:.2f}")
+    return clusters
 
-    snap_frames = []
-    total_frames = len(smoothed)
 
-    # Gradient of smoothed velocity to detect rapid change
-    grad = np.gradient(smoothed)
+# ------------------------------------------------------------------
+# Snap Detection
+# ------------------------------------------------------------------
 
-    snap_candidates = []
-    
-    # Detect snap at the START of velocity increase from calm state
-    # Look for the first frame where velocity transitions from calm to rising
-    # Use slightly shorter look-ahead to detect ~0.5s earlier
-    look_ahead_frames = max(10, int(fps * 0.4))  # Look ~0.4s ahead to confirm motion
-    
-    for i in range(calm_window, total_frames - look_ahead_frames):
-        # Check calm period before (long window)
-        pre_calm = np.mean(smoothed[i - calm_window:i])
-        
-        # Current velocity at this frame
-        current_vel = smoothed[i]
-        
-        # Look ahead to confirm motion is coming
-        future_window = smoothed[i:i + look_ahead_frames]
-        future_avg = np.mean(future_window)
-        future_max = np.max(future_window)
-        
-        # Gradient at this point (how fast velocity is changing NOW)
-        current_grad = grad[i]
-        
-        # Check if velocity is starting to rise (current > calm baseline)
-        velocity_rising = current_vel > pre_calm * 1.05  # 5% increase from calm
-        
-        # Check if motion will develop (future confirms motion)
-        # Slightly lower thresholds to detect earlier
-        motion_coming = future_avg > motion_threshold * 0.3 or future_max > motion_threshold * 0.5
+def detect_snaps(
+    velocities,
+    mover_counts,
+    fps,
+    skip_start_frames=0,
+    set_window_seconds=1.5,
+    min_movers=4,
+    max_snap_fraction=0.95,
+    cluster_gap_seconds=0.5,
+    top_k=1,
+):
+    """
+    Find the snap frame.
 
-        # Conditions for snap (detect slightly earlier - ~0.5s before full motion):
-        # 1. Calm before snap (below threshold * 1.5)
-        calm_ok = pre_calm < calm_threshold * 1.5
-        # 2. Velocity starting to rise NOW (not waiting for it to develop)
-        rising_ok = velocity_rising or current_grad > 0
-        # 3. Positive gradient (velocity increasing NOW, even if small) - slightly lower threshold
-        grad_ok = current_grad > gradient_threshold * 0.13  # Slightly lower to catch ~0.5s earlier
-        # 4. Motion confirmed in future (we know motion is coming)
-        motion_ok = motion_coming
-        
-        # Require calm + (rising OR gradient) + motion confirmation
-        if calm_ok and motion_ok and (rising_ok or grad_ok):
-            # Calculate confidence score (higher is better)
-            # Prioritize early detection: strong gradient + calm before + motion ahead
-            calm_score = 1.0 - (pre_calm / calm_threshold) if calm_threshold > 0 else 0
-            gradient_score = current_grad / gradient_threshold if gradient_threshold > 0 else 0
-            jump_score = (future_avg - pre_calm) / calm_threshold if calm_threshold > 0 else 0
-            future_score = (future_avg - motion_threshold * 0.4) / motion_threshold if motion_threshold > 0 else 0
-            
-            # Bonus for early detection (earlier frames get slightly higher score)
-            early_bonus = 1.0 - (i / total_frames) if total_frames > 0 else 0
-            
-            # Strong gradient is key indicator of transition starting
-            # Slightly favor earlier detection
-            confidence = calm_score + gradient_score * 3 + jump_score + future_score + early_bonus * 0.4
-            
-            #Offset by 1 second to ensure early rather than late detection of snap
-            index_w_offset = max (i - fps, 0)
+    Parameters
+    ----------
+    velocities          : camera-corrected per-frame velocity array
+    mover_counts        : per-frame count of players genuinely moving
+    fps                 : frames per second
+    skip_start_frames   : ignore this many frames at the start (huddle break)
+    set_window_seconds  : how long (in seconds) of calm is required before a
+                          snap candidate is accepted (set / offsides guard)
+    min_movers          : minimum number of players that must move simultaneously
+                          (filters refs, isolated pre-snap shifts)
+    max_snap_fraction   : ignore candidates beyond this fraction of total frames
+    cluster_gap_seconds : deduplicate candidates closer than this
+    top_k               : how many final snap candidates to return
+    """
+    n = len(velocities)
+    if n == 0:
+        return []
 
-            snap_candidates.append({
-                'frame': int(index_w_offset), 
-                'time': index_w_offset / fps,
-                'confidence': confidence,
-                'pre_calm': pre_calm,
-                'current_vel': current_vel,
-                'gradient': current_grad
+    # Smooth velocity (~0.4 s window)
+    smooth_win = max(5, int(fps * 0.4))
+    kernel = np.ones(smooth_win) / smooth_win
+    smoothed = np.convolve(velocities, kernel, mode="same")
+
+    # Smooth mover counts the same way for stability
+    smoothed_movers = np.convolve(mover_counts.astype(np.float32), kernel, mode="same")
+
+    # Adaptive thresholds
+    calm_threshold  = np.percentile(smoothed, 30)
+    motion_threshold = np.percentile(smoothed, 70)
+    accel = np.gradient(np.gradient(smoothed))
+    accel_threshold = np.percentile(np.abs(accel), 80)
+
+    print(
+        f"[INFO] Thresholds: calm={calm_threshold:.2f}, "
+        f"motion={motion_threshold:.2f}, accel={accel_threshold:.4f}"
+    )
+
+    # Hard-count mask: avoid calling snap during spike-then-return events
+    hardcount_mask = build_hardcount_mask(smoothed, fps)
+
+    # Set window: how many frames of calm are required before the snap
+    set_window_frames = max(smooth_win, int(fps * set_window_seconds))
+
+    # Look-ahead: confirm motion is actually coming
+    look_ahead = max(5, int(fps * 0.3))
+
+    # Max frame cap
+    max_frame = int(n * max_snap_fraction)
+
+    candidates = []
+
+    start = max(skip_start_frames, set_window_frames)
+    for i in range(start, max_frame - look_ahead):
+
+        # Skip hard-count / offsides zones
+        if hardcount_mask[i]:
+            continue
+
+        pre_window = smoothed[i - set_window_frames:i]
+        future_window = smoothed[i:i + look_ahead]
+
+        pre_mean = float(np.mean(pre_window))
+        pre_std  = float(np.std(pre_window))
+        future_avg = float(np.mean(future_window))
+        future_max = float(np.max(future_window))
+
+        # Gate 1: long calm before snap
+        calm_ok = pre_mean < calm_threshold * 1.2
+
+        # Gate 2: stability of calm period (not mid-motion-shift)
+        stable_ok = pre_std < (calm_threshold * 0.6)
+
+        # Gate 3: motion clearly coming
+        motion_ok = future_avg > motion_threshold * 0.4 or future_max > motion_threshold * 0.6
+
+        # Gate 4: acceleration spike at this frame
+        accel_ok = np.abs(accel[i]) > accel_threshold * 0.8
+
+        # Gate 5: multiple players moving simultaneously (not just 1-2)
+        movers_ok = smoothed_movers[i] >= min_movers
+
+        if calm_ok and stable_ok and motion_ok and (accel_ok or movers_ok):
+            confidence = (
+                (motion_threshold - pre_mean)             # reward calm before
+                + np.abs(accel[i]) * 2.0                  # reward sharp transition
+                + (future_avg - pre_mean)                  # reward big velocity jump
+                + float(smoothed_movers[i]) * 0.3         # reward many movers
+            )
+            frame = int(i) - 2*fps
+            candidates.append({
+                "frame": frame,
+                "time": round(frame/ fps, 3),
+                "confidence": float(confidence),
             })
 
-    # Filter out unlikely late detections (camera pans, etc.)
-    snap_candidates = [s for s in snap_candidates if s['frame'] < total_frames * 0.6]
+    if not candidates:
+        print("[WARNING] No snap candidates found with all gates. Relaxing stability gate.")
+        # Fallback: relax the stability gate (but keep all others)
+        for i in range(start, max_frame - look_ahead):
+            if hardcount_mask[i]:
+                continue
+            pre_window = smoothed[i - set_window_frames:i]
+            future_window = smoothed[i:i + look_ahead]
+            pre_mean = float(np.mean(pre_window))
+            future_avg = float(np.mean(future_window))
+            future_max = float(np.max(future_window))
+            calm_ok   = pre_mean < calm_threshold * 1.5
+            motion_ok = future_avg > motion_threshold * 0.3 or future_max > motion_threshold * 0.5
+            accel_ok  = np.abs(accel[i]) > accel_threshold * 0.5
+            if calm_ok and motion_ok and accel_ok:
+                confidence = (
+                    (motion_threshold - pre_mean)
+                    + np.abs(accel[i]) * 2.0
+                    + (future_avg - pre_mean)
+                )
+                candidates.append({
+                    "frame": int(i),
+                    "time": round(i / fps, 3),
+                    "confidence": float(confidence),
+                })
 
-    # Return only the best snap (highest confidence)
-    if len(snap_candidates) == 0:
+    if not candidates:
         return []
-    
-    # Sort by confidence (highest first)
-    snap_candidates.sort(key=lambda x: x['confidence'], reverse=True)
-    
-    # Return only the best snap
-    best_snap = snap_candidates[0]
-    return [{'frame': best_snap['frame'], 'time': best_snap['time']}]
+
+    # Deduplicate: collapse adjacent frames from the same snap event
+    cluster_gap = max(1, int(fps * cluster_gap_seconds))
+    candidates = cluster_candidates(candidates, cluster_gap)
+
+    # Sort by confidence and return top-K
+    candidates.sort(key=lambda c: c["confidence"], reverse=True)
+    return candidates[:top_k]
+
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Snap Detection")
-    parser.add_argument("--player-detections", type=str, required=True,
-                        help="Path to player detection JSON file")
-    parser.add_argument("--output", type=str, required=True,
-                        help="Path to output JSON file")
-    parser.add_argument("--calm-threshold", type=float, default=None,
-                        help="Below this = calm (None = auto)")
-    parser.add_argument("--motion-threshold", type=float, default=None,
-                        help="Above this = active motion (None = auto)")
-
+    parser.add_argument("--player-detections", required=True,
+                        help="Path to player detection JSON")
+    parser.add_argument("--output", required=True,
+                        help="Path to output JSON")
+    parser.add_argument("--skip-start-seconds", type=float, default=1.5,
+                        help="Ignore first N seconds (huddle break). Default 1.5.")
+    parser.add_argument("--set-window-seconds", type=float, default=1.5,
+                        help="Required calm window before snap (seconds). Default 1.5.")
+    parser.add_argument("--min-movers", type=int, default=4,
+                        help="Minimum players moving at snap. Default 4.")
+    parser.add_argument("--top-k", type=int, default=1,
+                        help="Number of snap candidates to return. Default 1.")
     args = parser.parse_args()
 
-    print(f"[INFO] Loading player detections from: {args.player_detections}")
-    detections = load_player_detections(args.player_detections)
+    print(f"[INFO] Loading detections from: {args.player_detections}")
+    raw = load_player_detections(args.player_detections)
 
-    print("[INFO] Computing motion-compensated velocities...")
-    velocities, fps = compute_velocity(detections)
+    print("[INFO] Computing camera-corrected velocities...")
+    velocities, mover_counts, fps = compute_velocity(raw)
 
     if len(velocities) == 0:
-        print("[ERROR] No detections found — cannot compute snap.")
+        print("[ERROR] No velocity data computed.")
         sys.exit(1)
 
     print(f"[INFO] Velocity stats: mean={np.mean(velocities):.2f}, max={np.max(velocities):.2f}")
 
-    print("[INFO] Detecting snap frames...")
-    snap_frames = detect_snaps(
-        velocities, fps,
-        calm_threshold=args.calm_threshold,
-        motion_threshold=args.motion_threshold
+    skip_frames = int(fps * args.skip_start_seconds)
+    print(f"[INFO] Skipping first {skip_frames} frames (huddle break guard).")
+
+    snaps = detect_snaps(
+        velocities,
+        mover_counts,
+        fps,
+        skip_start_frames=skip_frames,
+        set_window_seconds=args.set_window_seconds,
+        min_movers=args.min_movers,
+        top_k=args.top_k,
     )
 
-    print(f"[SUCCESS] Found {len(snap_frames)} snap(s):")
-    for i, snap in enumerate(snap_frames, 1):
-        print(f"   {i}. Frame {snap['frame']} ({snap['time']:.2f}s)")
+    print(f"[SUCCESS] Found {len(snaps)} snap(s):")
+    for i, s in enumerate(snaps, 1):
+        print(f"   {i}. Frame {s['frame']}  ({s['time']:.2f}s)  confidence={s['confidence']:.2f}")
 
-    # Save output
     output_data = {
-        'video_info': detections.get('video_info', {}),
-        'snaps': snap_frames,
-        'detection_info': {
-            'calm_threshold': args.calm_threshold,
-            'motion_threshold': args.motion_threshold
-        }
+        "video_info": raw.get("video_info", {}),
+        "snaps": snaps,
     }
 
-    os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
-    with open(args.output, 'w') as f:
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+    with open(args.output, "w") as f:
         json.dump(output_data, f, indent=2)
 
-    print(f"[SUCCESS] Results saved to {args.output}")
-    print("[SUCCESS] Snap detection completed successfully!")
+    print(f"[SUCCESS] Saved to {args.output}")
+
 
 if __name__ == "__main__":
     sys.exit(main())

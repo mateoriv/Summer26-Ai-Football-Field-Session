@@ -40,7 +40,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
-
+import torch.nn.functional as F
+from itertools import combinations
 
 class PositionsDataset(Dataset):
     """
@@ -64,6 +65,19 @@ class PositionsDataset(Dataset):
 
         self.label_col = label_col
 
+        # Drop rows with missing or empty labels (otherwise NaN -> int64 gives invalid class IDs)
+        raw_labels_series = df[label_col]
+        valid = raw_labels_series.notna() & (raw_labels_series.astype(str).str.strip() != "")
+        if not valid.all():
+            n_dropped = (~valid).sum()
+            df = df.loc[valid].reset_index(drop=True)
+            if len(df) == 0:
+                raise ValueError(
+                    f"Label column '{label_col}' has no valid (non-empty) labels. "
+                    f"Dropped {n_dropped} row(s) with missing/empty labels."
+                )
+            print(f"[WARNING] Dropped {n_dropped} row(s) with missing/empty '{label_col}'.")
+
         # Keep clip names for later reporting (fall back to row index string)
         if "clip_name" in df.columns:
             self.clip_names = df["clip_name"].astype(str).tolist()
@@ -74,7 +88,7 @@ class PositionsDataset(Dataset):
         if feature_cols is None:
             # Select numeric columns whose names indicate normalized positions (nx*/ny*)
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            norm_cols = [col for col in numeric_cols if 'n' in str(col)]
+            norm_cols = [col for col in numeric_cols if col.startswith("nx") or col.startswith("ny")]
             if label_col in norm_cols:
                 norm_cols.remove(label_col)
 
@@ -95,25 +109,20 @@ class PositionsDataset(Dataset):
 
         # Extract features
         features = df[self.feature_cols].to_numpy(dtype=np.float32)
+        self.mean = features.mean(axis=0)
+        self.std = features.std(axis=0)
+        if normalize:
+            # Normalize features and extract geometric features
+            features = self.extract_geometric_features(features)
+            self.features = features
+        else:
+            self.features = torch.from_numpy(features)
         
-        # NORMALIZE FEATURES
-        coords = features.reshape(-1, 11, 2)
-
-        # 1. Center
-        centroid = coords.mean(axis=1, keepdims=True)
-        coords = coords - centroid
-        
-        # 2. Flatten back
-        features = coords.reshape(-1, 22)
-        self.mean = None
-        self.std = None
-
-        self.features = torch.from_numpy(features)
 
         # Handle labels (support numeric or string labels)
         raw_labels = df[label_col]
         if raw_labels.dtype == object:
-            # String / categorical labels -> map to integer class IDs
+            # String / categorical labels -> map to integer class IDs (skip NaN/empty already dropped)
             categories = sorted(raw_labels.unique())
             self.label_to_index = {label: idx for idx, label in enumerate(categories)}
             self.index_to_label = {idx: label for label, idx in self.label_to_index.items()}
@@ -133,13 +142,102 @@ class PositionsDataset(Dataset):
 
     @property
     def num_classes(self) -> int:
-        return int(self.labels.max().item() + 1)
+        # Use mapping size so we don't depend on labels.max() (which breaks when labels had NaN -> int64 min)
+        n = len(self.index_to_label)
+        if n < 1:
+            raise ValueError("No valid label classes in dataset.")
+        return n
 
     def __len__(self) -> int:
         return self.features.shape[0]
 
     def __getitem__(self, idx: int):
         return self.features[idx], self.labels[idx]
+
+    def extract_geometric_features(self, features: torch.Tensor) -> torch.Tensor:
+        # NORMALIZE FEATURES
+        if isinstance(features, np.ndarray):
+            features = torch.from_numpy(features)
+
+        features = features.float()
+        coords = features.reshape(-1, 11, 2)
+
+        # 1. Center (translation invariance)
+        centroid = coords.mean(axis=1, keepdims=True)
+        coords = coords - centroid
+        
+        B = coords.shape[0]
+
+        # -------------------------------------------------
+        # 1. Base Flattened Coordinates (11 * 2 = 22)
+        # -------------------------------------------------
+        base_features = coords.reshape(B, -1)
+
+        # -------------------------------------------------
+        # 2. Width & Depth (Span Features)
+        # -------------------------------------------------
+        x_max = torch.amax(coords[:, :, 0], dim=1)
+        x_min = torch.amin(coords[:, :, 0], dim=1)
+        x_span = x_max - x_min
+
+        y_max = torch.amax(coords[:, :, 1], dim=1)
+        y_min = torch.amin(coords[:, :, 1], dim=1)
+        y_span = y_max - y_min
+
+        span_features = torch.stack([x_span, y_span], dim=1)
+
+        # -------------------------------------------------
+        # 3. Mean Pairwise Distance
+        # -------------------------------------------------
+        pairwise_dists = []
+
+        for i, j in combinations(range(11), 2):
+            diff = coords[:, i] - coords[:, j]
+            dist = torch.norm(diff, dim=1)
+            pairwise_dists.append(dist)
+
+        pairwise_dists = torch.stack(pairwise_dists, dim=1)
+
+        mean_pairwise_distance = pairwise_dists.mean(dim=1, keepdim=True)
+
+        # -------------------------------------------------
+        # 4. Distance to Centroid Statistics
+        # -------------------------------------------------
+        d_to_centroid = torch.norm(coords - centroid, dim=2)
+
+        centroid_mean = d_to_centroid.mean(dim=1, keepdim=True)
+        centroid_std = d_to_centroid.std(dim=1, keepdim=True)
+
+        centroid_features = torch.cat([centroid_mean, centroid_std], dim=1)
+
+        # -------------------------------------------------
+        # 5. PCA Eigenvalues (Top 2)
+        # -------------------------------------------------
+        # Compute covariance matrix per batch
+        centered = coords - centroid
+        cov = torch.bmm(centered.transpose(1, 2), centered) / 11.0 + 1e-6 * torch.eye(2).to(coords.device)
+
+        eigvals = []
+
+        eigvals_all = torch.linalg.eigvalsh(cov)
+        eigvals_sorted = torch.sort(eigvals_all, dim=1).values
+        eigvals = eigvals_sorted[:, -2:]
+
+        # -------------------------------------------------
+        # Concatenate Everything
+        # -------------------------------------------------
+        features = torch.cat(
+            [
+                base_features,
+                span_features,
+                mean_pairwise_distance,
+                centroid_features,
+                eigvals,
+            ],
+            dim=1,
+        )
+
+        return features
 
 
 class PositionsNet(nn.Module):
