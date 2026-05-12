@@ -68,19 +68,25 @@ def match_players(prev_centers, curr_centers):
 # Velocity Computation
 # ------------------------------------------------------------------
 
-def compute_velocity(detections):
+def compute_velocity(detections, min_players_per_frame=15):
     """
     Returns:
         velocities       – per-frame scalar (camera-corrected, outlier-filtered)
         mover_counts     – per-frame count of players whose corrected motion
                            exceeds a small threshold (used for multi-player check)
+        player_counts    – per-frame raw player detection count
         fps
+
+    Frames with fewer than *min_players_per_frame* detections are treated as
+    unreliable: velocity and mover count are set to 0 and prev_centers is reset
+    so adjacent sparse frames cannot contaminate the velocity signal.
     """
     fps = detections.get("video_info", {}).get("fps", 30.0)
     frames = detections.get("frames", [])
 
     velocities = []
     mover_counts = []
+    player_counts = []
     prev_centers = None
     small_move_threshold = 1.5   # pixels; below this = "not really moving"
 
@@ -91,7 +97,16 @@ def compute_velocity(detections):
             if "center_x" in bbox and "center_y" in bbox:
                 centers.append([bbox["center_x"], bbox["center_y"]])
 
+        n_players = len(centers)
+        player_counts.append(n_players)
         centers = np.array(centers, dtype=np.float32)
+
+        # Frames below the minimum player threshold are unreliable – skip and reset
+        if n_players < min_players_per_frame:
+            velocities.append(0.0)
+            mover_counts.append(0)
+            prev_centers = None   # reset so next valid frame starts fresh
+            continue
 
         if prev_centers is None or len(prev_centers) == 0 or len(centers) == 0:
             velocities.append(0.0)
@@ -132,7 +147,12 @@ def compute_velocity(detections):
         mover_counts.append(movers)
         prev_centers = centers
 
-    return np.array(velocities, dtype=np.float32), np.array(mover_counts, dtype=np.int32), float(fps)
+    return (
+        np.array(velocities, dtype=np.float32),
+        np.array(mover_counts, dtype=np.int32),
+        np.array(player_counts, dtype=np.int32),
+        float(fps),
+    )
 
 
 # ------------------------------------------------------------------
@@ -207,9 +227,11 @@ def detect_snaps(
     velocities,
     mover_counts,
     fps,
+    player_counts=None,
     skip_start_frames=0,
     set_window_seconds=1.5,
     min_movers=4,
+    min_players_per_frame=15,
     max_snap_fraction=0.95,
     cluster_gap_seconds=0.5,
     top_k=1,
@@ -219,17 +241,20 @@ def detect_snaps(
 
     Parameters
     ----------
-    velocities          : camera-corrected per-frame velocity array
-    mover_counts        : per-frame count of players genuinely moving
-    fps                 : frames per second
-    skip_start_frames   : ignore this many frames at the start (huddle break)
-    set_window_seconds  : how long (in seconds) of calm is required before a
-                          snap candidate is accepted (set / offsides guard)
-    min_movers          : minimum number of players that must move simultaneously
-                          (filters refs, isolated pre-snap shifts)
-    max_snap_fraction   : ignore candidates beyond this fraction of total frames
-    cluster_gap_seconds : deduplicate candidates closer than this
-    top_k               : how many final snap candidates to return
+    velocities            : camera-corrected per-frame velocity array
+    mover_counts          : per-frame count of players genuinely moving
+    fps                   : frames per second
+    player_counts         : per-frame raw player detection count (from compute_velocity)
+    skip_start_frames     : ignore this many frames at the start (huddle break)
+    set_window_seconds    : how long (in seconds) of calm is required before a
+                            snap candidate is accepted (set / offsides guard)
+    min_movers            : minimum number of players that must move simultaneously
+                            (filters refs, isolated pre-snap shifts)
+    min_players_per_frame : frame must have at least this many detected players to
+                            be eligible as a snap candidate (default: 15)
+    max_snap_fraction     : ignore candidates beyond this fraction of total frames
+    cluster_gap_seconds   : deduplicate candidates closer than this
+    top_k                 : how many final snap candidates to return
     """
     n = len(velocities)
     if n == 0:
@@ -266,10 +291,20 @@ def detect_snaps(
     # Max frame cap
     max_frame = int(n * max_snap_fraction)
 
+    # Build a boolean mask: True where the frame has enough players to be eligible
+    if player_counts is not None and len(player_counts) == n:
+        enough_players = player_counts >= min_players_per_frame
+    else:
+        enough_players = np.ones(n, dtype=bool)
+
     candidates = []
 
     start = max(skip_start_frames, set_window_frames)
     for i in range(start, max_frame - look_ahead):
+
+        # Gate 6: must have enough detected players (hard gate, never relaxed)
+        if not enough_players[i]:
+            continue
 
         # Skip hard-count / offsides zones
         if hardcount_mask[i]:
@@ -307,15 +342,17 @@ def detect_snaps(
             )
             frame = int(i) - 2*fps
             candidates.append({
-                "frame": frame,
+                "frame": int(frame),
                 "time": round(frame/ fps, 3),
                 "confidence": float(confidence),
             })
 
     if not candidates:
         print("[WARNING] No snap candidates found with all gates. Relaxing stability gate.")
-        # Fallback: relax the stability gate (but keep all others)
+        # Fallback: relax the stability gate (but keep Gate 6 — player count is never relaxed)
         for i in range(start, max_frame - look_ahead):
+            if not enough_players[i]:
+                continue
             if hardcount_mask[i]:
                 continue
             pre_window = smoothed[i - set_window_frames:i]
@@ -332,9 +369,10 @@ def detect_snaps(
                     + np.abs(accel[i]) * 2.0
                     + (future_avg - pre_mean)
                 )
+                frame = max(0, int(i) - 2*fps)
                 candidates.append({
-                    "frame": int(i),
-                    "time": round(i / fps, 3),
+                    "frame": int(frame),
+                    "time": round(frame / fps, 3),
                     "confidence": float(confidence),
                 })
 
@@ -360,12 +398,14 @@ def main():
                         help="Path to player detection JSON")
     parser.add_argument("--output", required=True,
                         help="Path to output JSON")
-    parser.add_argument("--skip-start-seconds", type=float, default=1.5,
-                        help="Ignore first N seconds (huddle break). Default 1.5.")
-    parser.add_argument("--set-window-seconds", type=float, default=1.5,
-                        help="Required calm window before snap (seconds). Default 1.5.")
+    parser.add_argument("--skip-start-seconds", type=float, default=0,
+                        help="Ignore first N seconds (huddle break). Default 0")
+    parser.add_argument("--set-window-seconds", type=float, default=1,
+                        help="Required calm window before snap (seconds). Default 1")
     parser.add_argument("--min-movers", type=int, default=4,
                         help="Minimum players moving at snap. Default 4.")
+    parser.add_argument("--min-players", type=int, default=15,
+                        help="Minimum detected players required for a frame to be a snap candidate. Default 15.")
     parser.add_argument("--top-k", type=int, default=1,
                         help="Number of snap candidates to return. Default 1.")
     args = parser.parse_args()
@@ -374,13 +414,15 @@ def main():
     raw = load_player_detections(args.player_detections)
 
     print("[INFO] Computing camera-corrected velocities...")
-    velocities, mover_counts, fps = compute_velocity(raw)
+    velocities, mover_counts, player_counts, fps = compute_velocity(raw, min_players_per_frame=args.min_players)
 
     if len(velocities) == 0:
         print("[ERROR] No velocity data computed.")
         sys.exit(1)
 
+    eligible = int(np.sum(player_counts >= args.min_players))
     print(f"[INFO] Velocity stats: mean={np.mean(velocities):.2f}, max={np.max(velocities):.2f}")
+    print(f"[INFO] {eligible}/{len(player_counts)} frames have >= {args.min_players} players (eligible for snap).")
 
     skip_frames = int(fps * args.skip_start_seconds)
     print(f"[INFO] Skipping first {skip_frames} frames (huddle break guard).")
@@ -389,9 +431,11 @@ def main():
         velocities,
         mover_counts,
         fps,
+        player_counts=player_counts,
         skip_start_frames=skip_frames,
         set_window_seconds=args.set_window_seconds,
         min_movers=args.min_movers,
+        min_players_per_frame=args.min_players,
         top_k=args.top_k,
     )
 

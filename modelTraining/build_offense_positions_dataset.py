@@ -98,14 +98,18 @@ def get_positions_at_snap(positions_path: str, snap_frame: int) -> tuple[list, f
     Load position JSON and return (detections at snap frame, image width).
     Position file may have a single frame (snap only); match by frame_number.
     """
-    with open(positions_path, "r") as f:
-        data = json.load(f)
-    frames = data.get("frames") or []
-    width = float((data.get("video_info") or {}).get("width") or 1920)
-    for fr in frames:
-        if fr.get("frame_number") == snap_frame:
-            return (fr.get("detections") or [], width)
-    return ([], width)
+    try:
+        with open(positions_path, "r") as f:
+            data = json.load(f)
+        frames = data.get("frames") or []
+        width = float((data.get("video_info") or {}).get("width") or 1920)
+        for fr in frames:
+            if fr.get("frame_number") == snap_frame:
+                return (fr.get("detections") or [], width)
+        return ([], width)
+    except Exception as e:
+        print(f"[ERROR] Error loading positions: {e}")
+        return ([], 1920)
 
 
 def get_normalized_positions(players_path: str, snap_frame: int) -> list:
@@ -249,47 +253,51 @@ def build_dataset(
     rows = []
     for snap_name in sorted(snap_files):
         video_stem = snap_name.replace("_snap_detection.json", "")
-        snap_path = os.path.join(snap_dir, snap_name)
-        positions_path = os.path.join(positions_dir, f"{video_stem}_position.json")
-        normalized_positions_path = os.path.join(normalized_positions_dir, f"{video_stem}_normalized_positions.json")
+        try:
+            snap_path = os.path.join(snap_dir, snap_name)
+            positions_path = os.path.join(positions_dir, f"{video_stem}_position.json")
+            normalized_positions_path = os.path.join(normalized_positions_dir, f"{video_stem}_normalized_positions.json")
 
-        snap_frame = get_snap_frame(snap_path)
-        if snap_frame is None:
-            print(f"[SKIP] No snap frame for: {video_stem}")
-            continue
+            snap_frame = get_snap_frame(snap_path)
+            if snap_frame is None:
+                print(f"[SKIP] No snap frame for: {video_stem}")
+                continue
 
-        position_detections, image_width = get_positions_at_snap(positions_path, snap_frame)
-        offense_side = get_offense_side_from_positions(position_detections, image_width)
-       
-        if offense_side is None:
-            print(f"[SKIP] Could not determine offense side for: {video_stem}")
-            continue
-        
-        normalized_positions = get_normalized_positions(normalized_positions_path, snap_frame)
-        points = take_first_11_on_side(normalized_positions, offense_side, image_width)
-        if len(points) < 11:
-            print(f"[SKIP] Only {len(points)} players on offense side for: {video_stem}")
-            continue
-        label = (
-            get_label_for_clip(
-                df_csv, video_stem, label_column,
-                match_by_order=match_by_order,
-                video_stem_to_index=video_stem_to_index,
+            position_detections, image_width = get_positions_at_snap(positions_path, snap_frame)
+            offense_side = get_offense_side_from_positions(position_detections, image_width)
+
+            if offense_side is None:
+                print(f"[SKIP] Could not determine offense side for: {video_stem}")
+                continue
+
+            normalized_positions = get_normalized_positions(normalized_positions_path, snap_frame)
+            points = take_first_11_on_side(normalized_positions, offense_side, image_width)
+            if len(points) < 11:
+                print(f"[SKIP] Only {len(points)} players on offense side for: {video_stem}")
+                continue
+
+            label = (
+                get_label_for_clip(
+                    df_csv, video_stem, label_column,
+                    match_by_order=match_by_order,
+                    video_stem_to_index=video_stem_to_index,
+                )
+                if df_csv is not None else None
             )
-            if df_csv is not None else None
-        )
-        if label is None:
-            label = ""
+            if label is None:
+                label = ""
 
-        # Include clip identifier in the output for easier debugging/tracing
-        row = {"clip_name": video_stem}
-        for i in range(11):
-            row[f"nx{i + 1}"] = points[i][0]
-            row[f"ny{i + 1}"] = points[i][1]
-            row[f"ox{i + 1}"] = points[i][2]
-            row[f"oy{i + 1}"] = points[i][3]
-        row["label"] = label
-        rows.append(row)
+            # Include clip identifier in the output for easier debugging/tracing
+            row = {"clip_name": video_stem}
+            for i in range(11):
+                row[f"nx{i + 1}"] = points[i][0]
+                row[f"ny{i + 1}"] = points[i][1]
+                row[f"ox{i + 1}"] = points[i][2]
+                row[f"oy{i + 1}"] = points[i][3]
+            row["label"] = label
+            rows.append(row)
+        except Exception as e:
+            print(f"[SKIP] Unexpected error for {video_stem}: {e}")
 
     if not rows:
         print("[WARNING] No rows produced.", file=sys.stderr)

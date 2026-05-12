@@ -33,11 +33,15 @@ Desktop tooling for browsing football clips, drawing detections, and syncing met
 That's it—video thumbnails, CSV grids, and the virtual field should populate automatically once a folder is selected.
 
 ## Repository Layout
-- `app/` – main PySide6 application, custom video player, file browser, data sheet, and virtual field widgets.
-- `scripts/` – helper scripts for processing videos and detections.
-- `cache/` – runtime JSON caches (YOLO detections, yard markers, homography data).
+- `app/` – main PySide6 application, custom video player, file browser, data sheet, virtual field, and processing dialogs.
+- `scripts/` – helper scripts for the processing pipeline (Player Detection through Static Process). See `scripts/docs.md`.
+- `models/` – offense-position model + metadata used by Step 7 (`staticProcess.py`).
 - `yolo_models/` – YOLO weights tracked with Git LFS.
-- `requirements.txt` – pinned Python dependencies for the GUI.
+- `modelTraining/` – training utilities for the offense-positions model (not bundled in the EXE).
+- `CNN/` – legacy folder. `CNN/staticProcess.py` is a compatibility shim that forwards to `scripts/staticProcess.py`; the rest is experimental Kaggle data not used by the app.
+- `cache/` – runtime JSON caches (YOLO detections, yard markers, homography data, per-folder data sheet CSV). Generated at runtime, not checked in.
+- `hudl_ai.spec` – PyInstaller spec for building the desktop EXE. See `build_docs.md`.
+- `requirements.txt` – pinned Python dependencies for the GUI and processing scripts.
 - `AUTHORS.txt` – contributors and acknowledgements.
 
-See `docs.md` for expanded setup guidance and component notes.
+See `docs.md` for expanded setup guidance and component notes, and `build_docs.md` for distributable build instructions.

@@ -109,10 +109,7 @@ class PositionsDataset(Dataset):
 
         # Extract features
         features = df[self.feature_cols].to_numpy(dtype=np.float32)
-        self.mean = features.mean(axis=0)
-        self.std = features.std(axis=0)
         if normalize:
-            # Normalize features and extract geometric features
             features = self.extract_geometric_features(features)
             self.features = features
         else:
@@ -155,14 +152,21 @@ class PositionsDataset(Dataset):
         return self.features[idx], self.labels[idx]
 
     def extract_geometric_features(self, features: torch.Tensor) -> torch.Tensor:
-        # NORMALIZE FEATURES
+        # Field dimensions: x is 0-100 yards, y is 0-53.333 yards
+        FIELD_LENGTH = 100.0
+        FIELD_WIDTH  = 160.0 / 3.0  # 53.333...
+
         if isinstance(features, np.ndarray):
             features = torch.from_numpy(features)
 
         features = features.float()
         coords = features.reshape(-1, 11, 2)
 
-        # 1. Center (translation invariance)
+        # Scale to [0, 1] using known field dimensions so x and y are on equal footing
+        coords[:, :, 0] = coords[:, :, 0] / FIELD_LENGTH
+        coords[:, :, 1] = coords[:, :, 1] / FIELD_WIDTH
+
+        # Center (translation invariance)
         centroid = coords.mean(axis=1, keepdims=True)
         coords = coords - centroid
         
@@ -278,6 +282,7 @@ def train_one_epoch(
     device: torch.device,
     label_lookup: Optional[dict[int, str]] = None,
     log_examples: int = 3,
+    noise_std: float = 0.0,
 ) -> Tuple[float, float]:
     model.train()
     running_loss = 0.0
@@ -287,6 +292,9 @@ def train_one_epoch(
     for inputs, targets in dataloader:
         inputs = inputs.to(device)
         targets = targets.to(device)
+
+        if noise_std > 0.0:
+            inputs = inputs + torch.randn_like(inputs) * noise_std
 
         optimizer.zero_grad()
         outputs = model(inputs)
@@ -355,18 +363,13 @@ def save_artifacts(
         "index_to_label": dataset.index_to_label,
         "num_features": dataset.num_features,
         "num_classes": dataset.num_classes,
-        "normalize": True if dataset.mean is not None else False,
-        "mean": dataset.mean.tolist() if dataset.mean is not None else None,
-        "std": dataset.std.tolist() if dataset.std is not None else None,
+        "normalize": "field_scale",  # x/100, y/(160/3), then centroid-centered
         "train_args": vars(args),
     }
 
     metadata_path = os.path.join(output_dir, "metadata.json")
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
-
-    print(f"[INFO] Saved model to: {model_path}")
-    print(f"[INFO] Saved metadata to: {metadata_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -421,7 +424,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dropout",
         type=float,
-        default=0.1,
+        default=0.3,
         help="Dropout probability between hidden layers.",
     )
     parser.add_argument(
@@ -437,11 +440,80 @@ def parse_args() -> argparse.Namespace:
         help="Directory to save model and metadata.",
     )
     parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=1e-4,
+        help="L2 weight decay for Adam optimizer (default: 1e-4).",
+    )
+    parser.add_argument(
+        "--augment-noise",
+        type=float,
+        default=0.01,
+        help="Std-dev of Gaussian noise added to features during training (0 = off, default: 0.01).",
+    )
+    parser.add_argument(
+        "--early-stop",
+        type=int,
+        default=50,
+        help="Stop training when val_loss has not improved for this many epochs, 0 to deactivate (default: 50).",
+    )
+    parser.add_argument(
+        "--lr-patience",
+        type=int,
+        default=25,
+        help="Epochs with no val_loss improvement before reducing LR (ReduceLROnPlateau, default: 25).",
+    )
+    parser.add_argument(
+        "--class-weights",
+        action="store_true",
+        default=True,
+        help="Weight the loss by inverse class frequency to combat class imbalance (default: on).",
+    )
+    parser.add_argument(
+        "--no-class-weights",
+        action="store_false",
+        dest="class_weights",
+        help="Disable class-weighted loss.",
+    )
+    parser.add_argument(
         "--no-cuda",
         action="store_true",
         help="Force CPU even if CUDA is available.",
     )
     return parser.parse_args()
+
+
+def _stratified_split(
+    dataset: "PositionsDataset",
+    val_fraction: float,
+    seed: int = 42,
+) -> Tuple["torch.utils.data.Subset", "torch.utils.data.Subset"]:
+    """
+    Split *dataset* into train/val subsets while preserving class proportions.
+    Classes with only one sample are placed in train.
+    """
+    from collections import defaultdict
+    rng = np.random.default_rng(seed)
+
+    label_to_indices: dict = defaultdict(list)
+    for idx in range(len(dataset)):
+        label = int(dataset.labels[idx].item())
+        label_to_indices[label].append(idx)
+
+    train_indices: list = []
+    val_indices: list = []
+
+    for label, indices in label_to_indices.items():
+        indices = list(rng.permutation(indices))
+        n_val = max(0, int(round(len(indices) * val_fraction)))
+        # Guarantee at least one training sample per class
+        n_val = min(n_val, len(indices) - 1)
+        val_indices.extend(indices[:n_val])
+        train_indices.extend(indices[n_val:])
+
+    train_subset = torch.utils.data.Subset(dataset, train_indices)
+    val_subset = torch.utils.data.Subset(dataset, val_indices)
+    return train_subset, val_subset
 
 
 def main() -> None:
@@ -456,34 +528,37 @@ def main() -> None:
         csv_path=args.csv_path,
         label_col=args.label_col,
         feature_cols=args.feature_cols,
-        normalize=True,
+        normalize=True
     )
     print(f"[INFO] Loaded dataset with {len(dataset)} samples.")
     print(f"[INFO] Num features: {dataset.num_features}, Num classes: {dataset.num_classes}")
 
-    # Train/validation split
+    # Stratified train/val split (preserves class proportions)
     if 0.0 < args.val_split < 1.0 and len(dataset) > 1:
-        val_size = int(len(dataset) * args.val_split)
-        train_size = len(dataset) - val_size
-        train_dataset, val_dataset = random_split(
-            dataset,
-            [train_size, val_size],
-            generator=torch.Generator().manual_seed(42),
-        )
+        train_dataset, val_dataset = _stratified_split(dataset, args.val_split)
+        print(f"[INFO] Stratified split: {len(train_dataset)} train / {len(val_dataset)} val")
     else:
         train_dataset = dataset
         val_dataset = None
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-    )
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = (
         DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
         if val_dataset is not None
         else None
     )
+
+    # Weighted CrossEntropyLoss to handle class imbalance
+    if args.class_weights and val_dataset is not None:
+        train_indices = train_dataset.indices  # type: ignore[attr-defined]
+        train_labels = dataset.labels[train_indices]
+        class_counts = torch.bincount(train_labels, minlength=dataset.num_classes).float()
+        weights = 1.0 / class_counts.clamp(min=1)
+        weights = (weights / weights.sum() * dataset.num_classes).to(device)
+        criterion: nn.Module = nn.CrossEntropyLoss(weight=weights)
+        print(f"[INFO] Using class-weighted loss.")
+    else:
+        criterion = nn.CrossEntropyLoss()
 
     model = PositionsNet(
         input_dim=dataset.num_features,
@@ -492,10 +567,14 @@ def main() -> None:
         dropout=args.dropout,
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", patience=args.lr_patience, factor=0.5
+    )
 
-    best_val_acc = 0.0
+    best_val_loss = float("inf")
+    epochs_no_improve = 0
+
     for epoch in range(1, args.epochs + 1):
         train_loss, train_acc = train_one_epoch(
             model,
@@ -505,21 +584,32 @@ def main() -> None:
             device,
             label_lookup=dataset.index_to_label,
             log_examples=3,
+            noise_std=args.augment_noise,
         )
         if val_loader is not None:
             val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+            scheduler.step(val_loss)
         else:
             val_loss, val_acc = 0.0, 0.0
 
+        current_lr = optimizer.param_groups[0]["lr"]
         print(
             f"Epoch {epoch:03d}/{args.epochs} "
             f"- train_loss: {train_loss:.4f}, train_acc: {train_acc:.4f} "
-            f"- val_loss: {val_loss:.4f}, val_acc: {val_acc:.4f}"
+            f"- val_loss: {val_loss:.4f}, val_acc: {val_acc:.4f} "
+            f"- lr: {current_lr:.2e}"
         )
 
-        if val_loader is not None and val_acc > best_val_acc:
-            best_val_acc = val_acc
-            save_artifacts(model, args.output_dir, dataset, args)
+        if val_loader is not None:
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                epochs_no_improve = 0
+                save_artifacts(model, args.output_dir, dataset, args)
+            elif args.early_stop > 0:
+                epochs_no_improve += 1
+                if epochs_no_improve >= args.early_stop:
+                    print(f"[INFO] Early stopping triggered after {epoch} epochs (no val_loss improvement for {args.early_stop} epochs).")
+                    break
 
     # If no validation set, save final model
     if val_loader is None:
@@ -573,6 +663,41 @@ def main() -> None:
     result_df.to_csv(result_path)
     print(f"[INFO] Saved per-clip predictions to {result_path}")
     print(result_df)
+
+    # ── Side-by-side Actual vs Predicted distribution chart ──────────────────
+    BAR_WIDTH = 28
+    label_names = [dataset.index_to_label.get(i, str(i)) for i in range(dataset.num_classes)]
+
+    actual_counts   = torch.bincount(dataset.labels, minlength=dataset.num_classes)
+    pred_tensor     = torch.tensor(all_pred, dtype=torch.long)
+    predicted_counts = torch.bincount(pred_tensor, minlength=dataset.num_classes)
+
+    max_any = int(max(actual_counts.max().item(), predicted_counts.max().item()))
+
+    col_w = 22
+    print(f"\n{'─' * (col_w + BAR_WIDTH + 8 + col_w + BAR_WIDTH + 8)}")
+    print(
+        f"  {'ACTUAL':<{col_w + BAR_WIDTH + 6}}"
+        f"  {'PREDICTED':<{col_w + BAR_WIDTH + 6}}"
+    )
+    print(f"{'─' * (col_w + BAR_WIDTH + 8 + col_w + BAR_WIDTH + 8)}")
+    for class_idx in range(dataset.num_classes):
+        name        = label_names[class_idx]
+        a_count     = int(actual_counts[class_idx].item())
+        p_count     = int(predicted_counts[class_idx].item())
+        a_filled    = int(round(a_count / max_any * BAR_WIDTH)) if max_any else 0
+        p_filled    = int(round(p_count / max_any * BAR_WIDTH)) if max_any else 0
+        a_bar       = "█" * a_filled + "░" * (BAR_WIDTH - a_filled)
+        p_bar       = "█" * p_filled + "░" * (BAR_WIDTH - p_filled)
+
+        # Highlight classes where prediction count deviates significantly
+        marker = " !" if abs(p_count - a_count) > max(1, a_count * 0.5) else "  "
+        print(
+            f"  {name:<{col_w}} {a_bar} {a_count:>4d}"
+            f"  {name:<{col_w}} {p_bar} {p_count:>4d}{marker}"
+        )
+    print(f"{'─' * (col_w + BAR_WIDTH + 8 + col_w + BAR_WIDTH + 8)}")
+    print(f"  ! = predicted count differs from actual by >50%\n")
 
 
 if __name__ == "__main__":

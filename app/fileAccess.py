@@ -8,41 +8,43 @@ import sys
 from pathlib import Path
 import pandas as pd
 
-def get_cache_dir():
-    """
-    Get the cache directory path. Returns a persistent location that works
-    both in development and when compiled with PyInstaller.
-    
-    When compiled: Uses a cache directory next to the executable (persistent)
-    When in development: Uses the project root's cache directory
+def _get_exe_dir():
+    """Return the directory that contains (or should contain) bundled resources.
+
+    - PyInstaller onefile : sys._MEIPASS  (temp extraction folder)
+    - Other frozen builds : working directory at startup
+    - Development         : project root derived from this file's location
     """
     if hasattr(sys, "_MEIPASS"):
-        # Running as compiled executable - use directory next to executable for persistent cache
-        exe_dir = os.path.dirname(sys.executable)
-        cache_dir = os.path.join(exe_dir, "cache")
+        return sys._MEIPASS
+    if getattr(sys, "frozen", False):
+        # Generic frozen-app fallback: bundled assets typically live in the
+        # current working directory at startup.
+        return os.getcwd()
+    # Development: navigate up from app/fileAccess.py → project root
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def get_cache_dir():
+    """Return a *persistent* cache directory that survives across runs.
+
+    For compiled builds the cache lives next to the executable on disk
+    (not in the temp extraction folder, which is wiped on exit).
+    For development it lives under the project root.
+    """
+    if hasattr(sys, "_MEIPASS") or getattr(sys, "frozen", False):
+        cache_dir = os.path.join(os.path.dirname(sys.executable), "cache")
     else:
-        # Running in development mode
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(app_dir)
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         cache_dir = os.path.join(project_root, "cache")
-    
-    # Ensure cache directory exists
+
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
 
+
 def get_project_root():
-    """
-    Get the project root directory. For compiled executables, this returns
-    the directory containing the executable. For development, returns the
-    actual project root.
-    """
-    if hasattr(sys, "_MEIPASS"):
-        # Running as compiled executable - use executable directory
-        return os.path.dirname(sys.executable)
-    else:
-        # Running in development mode
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.dirname(app_dir)
+    """Return the root directory where bundled assets (scripts/, yolo_models/, …) live."""
+    return _get_exe_dir()
 
 def create_file_title_bar(dock):
     """Create a custom title bar for the file access dock widget"""

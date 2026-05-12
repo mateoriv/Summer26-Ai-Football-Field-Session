@@ -3,10 +3,10 @@
 PyInstaller spec for building the Hudl AI desktop UI as a single-file binary.
 The spec is configured to bundle the PySide6 Qt plugins plus the local assets
 that the application expects to find relative to the project root:
-    - yolo_models/  (Git LFS weights)
-    - cache/        (precomputed detection + homography samples)
+    - app/          (UI modules and runtime helpers)
     - scripts/      (helper pipelines invoked from the UI)
-    - CNN/          (static processing helper)
+    - models/       (offense position model + metadata)
+    - yolo_models/  (Git LFS weights)
 
 Hidden imports include cv2 (OpenCV) and numpy to ensure they are properly
 bundled with the executable, as they are used throughout the application
@@ -39,49 +39,24 @@ def collect_directory(src_root: str, target_prefix: str):
             collected.append((src_path, dest_dir))
     return collected
 
-# Bundle project asset directories (plus app modules for subprocess access).
-# Exclude CNN/nfl-big-data-bowl-2026-prediction as it's not part of the main app
-asset_dirs = ["app", "scripts", "yolo_models", "cache", "CNN"]
+# Bundle only runtime-required project asset directories.
+asset_dirs = ["app", "scripts", "models", "yolo_models"]
 asset_datas = []
 for rel_path in asset_dirs:
     src_path = os.path.join(PROJECT_ROOT, rel_path)
     if os.path.exists(src_path):
-        # For CNN directory, exclude the nfl-big-data-bowl-2026-prediction subdirectory
-        if rel_path == "CNN":
-            for root, dirs, files in os.walk(src_path):
-                # Skip nfl-big-data-bowl-2026-prediction directory
-                if 'nfl-big-data-bowl-2026-prediction' in dirs:
-                    dirs.remove('nfl-big-data-bowl-2026-prediction')
-                rel_dir = os.path.relpath(root, src_path)
-                if rel_dir == ".":
-                    rel_dir = ""
-                dest_dir = os.path.join(rel_path, rel_dir) if rel_dir else rel_path
-                for filename in files:
-                    src_file = os.path.join(root, filename)
-                    asset_datas.append((src_file, dest_dir))
-        else:
-            asset_datas.extend(collect_directory(src_path, rel_path))
+        asset_datas.extend(collect_directory(src_path, rel_path))
 
 datas = asset_datas
+
 binaries = []
 # Minimal hiddenimports - PyInstaller will auto-detect most imports from script analysis
-hiddenimports = ["darkdetect", "cv2", "numpy", "ultralytics", "ultralytics.models", "ultralytics.utils", "torch"]
+hiddenimports = ["darkdetect", "cv2", "numpy", "ultralytics", "ultralytics.models", "ultralytics.utils", "torch", "scipy", "scipy.spatial", "scipy.spatial.distance", "pdb"]
 
-# Exclude unused libraries and submodules to reduce executable size
-# PyInstaller will automatically detect needed imports from the scripts,
-# so we don't need collect_all() which bundles everything
+# Keep excludes minimal for torch/ultralytics reliability.
+# Aggressive excludes can break deep transitive imports at runtime.
 excludes = [
-    # Unused libraries
-    "scipy",
-    "sympy", 
-    "networkx",
-    "mpmath",
-    "polars",
-    "polars_runtime_32",
-    "requests",
-    "psutil",
-    "pkg_resources.py2_warn",  # Suppress deprecation warnings
-    # Project-local modules we don't want in the installer
+    "tkinter",
     "modelTraining",
 ]
 
@@ -93,7 +68,7 @@ script_files = [
     "scripts/yardMarkerDetection.py",
     "scripts/autoCorrespondancePoints.py",
     "scripts/perFrameHomographyTransform.py",
-    "CNN/staticProcess.py",
+    "scripts/staticProcess.py",
 ]
 
 # Add scripts to analysis so their imports are detected
@@ -104,7 +79,7 @@ analysis_scripts = ["app/application.py"] + script_paths
 
 a = Analysis(
     analysis_scripts,
-    pathex=[PROJECT_ROOT, APP_DIR, os.path.join(PROJECT_ROOT, "scripts"), os.path.join(PROJECT_ROOT, "CNN")],
+    pathex=[PROJECT_ROOT, APP_DIR, os.path.join(PROJECT_ROOT, "scripts")],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

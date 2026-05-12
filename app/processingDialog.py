@@ -662,7 +662,7 @@ class ProcessingWorker(QThread):
                     
                     # Run static process
                     cmd_result = build_script_command(
-                        get_resource_path("CNN", "staticProcess.py"),
+                        get_resource_path("scripts", "staticProcess.py"),
                         "--video-name", self.video_name,
                         "--folder-name", self.video_folder,
                         "--cache-dir", self.output_dir

@@ -64,13 +64,18 @@ git lfs pull
 
 ## Repository Walkthrough
 - `app/`: PySide6 desktop UI. See `app/docs.md` for per-module details.
-- `scripts/`: Processing scripts for detections, homography, and rendering. Documented in `scripts/docs.md`.
+- `scripts/`: Processing pipeline scripts (Player Detection, Snap Detection, Position Detection, Yard Marker Detection, Auto Correspondence Points, Per-Frame Homography Transform, Static Process). Documented in `scripts/docs.md`.
+- `models/`: Trained offense-position model (`offense_positions/formModel.pt`) plus metadata, consumed by Step 7 (`scripts/staticProcess.py`).
+- `yolo_models/`: YOLO weight files tracked with Git LFS (`bestPlayerDetectorM.pt`, `positionDetection.pt`, `yardMarkerDetection.pt`).
+- `modelTraining/`: Scripts used to build training data and train the offense-positions model. Not bundled into the EXE.
+- `CNN/`: Legacy folder. `CNN/staticProcess.py` is a compatibility shim forwarding to `scripts/staticProcess.py`; the `nfl-big-data-bowl-2026-prediction/` subfolder is experimental data not used by the runtime app.
 - `cache/`: Runtime cache populated by the scripts and UI (safe to delete between runs).
-- `yolo_models/`: YOLO weight files tracked with Git LFS.
+- `hudl_ai.spec`: PyInstaller spec used to build the distributable EXE. See `build_docs.md`.
 - `requirements.txt`: Locked Python dependencies for the UI and processing scripts.
 - `AUTHORS.txt`: Contributors.
 - `README.md`: Quick start reference.
 - `docs.md`: This document.
+- `build_docs.md`: Build & distribution instructions.
 
 ## Running The Pipeline End-to-End
 1. Add raw videos to a working folder.

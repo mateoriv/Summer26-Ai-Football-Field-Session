@@ -357,7 +357,7 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             steps[5]["env"] = None
         
         cmd_result = build_script_command(
-            get_resource_path("CNN", "staticProcess.py"),
+            get_resource_path("scripts", "staticProcess.py"),
             "--video-name", video_name,
             "--folder-name", video_folder,
             "--cache-dir", output_dir
@@ -1039,7 +1039,7 @@ class BatchProcessingDialog(QDialog):
         self.start_button.setVisible(False)
         self.close_button.setVisible(True)
     
-    def reload_data_sheet_csv(self):
+    def reload_data_sheet_csv(self, silent=False):
         """Reload the data sheet CSV after batch processing"""
         if not self.parent_window:
             return
@@ -1048,10 +1048,12 @@ class BatchProcessingDialog(QDialog):
             # Try to reload from current CSV path first
             if hasattr(self.parent_window, 'current_csv_path') and self.parent_window.current_csv_path:
                 if os.path.exists(self.parent_window.current_csv_path):
-                    self.add_output(f"\nReloading data sheet: {self.parent_window.current_csv_path}")
+                    if not silent:
+                        self.add_output(f"\nReloading data sheet: {self.parent_window.current_csv_path}")
                     if hasattr(self.parent_window, 'load_csv_file'):
                         self.parent_window.load_csv_file(self.parent_window.current_csv_path)
-                        self.add_output("Data sheet reloaded successfully")
+                        if not silent:
+                            self.add_output("Data sheet reloaded successfully")
                         return
             
             # Try to find CSV in cache directory based on current folder
@@ -1062,13 +1064,17 @@ class BatchProcessingDialog(QDialog):
                 csv_path = os.path.join(base_cache_dir, folder_name, f"{folder_name}_data.csv")
                 
                 if os.path.exists(csv_path) and hasattr(self.parent_window, 'load_csv_file'):
-                    self.add_output(f"\nReloading data sheet from cache: {csv_path}")
+                    if not silent:
+                        self.add_output(f"\nReloading data sheet from cache: {csv_path}")
                     self.parent_window.load_csv_file(csv_path)
-                    self.add_output("Data sheet reloaded successfully")
+                    if not silent:
+                        self.add_output("Data sheet reloaded successfully")
                 else:
-                    self.add_output(f"\nNote: CSV file not found at {csv_path}")
+                    if not silent:
+                        self.add_output(f"\nNote: CSV file not found at {csv_path}")
         except Exception as e:
-            self.add_output(f"\nWarning: Could not reload data sheet: {str(e)}")
+            if not silent:
+                self.add_output(f"\nWarning: Could not reload data sheet: {str(e)}")
             _batch_logger.error(f"Error reloading data sheet after batch processing: {e}", exc_info=True)
     
     def batch_failed(self, error_message):
@@ -1118,4 +1124,8 @@ class BatchProcessingDialog(QDialog):
             # Give the worker a moment to cancel gracefully
             if not self.worker.wait(3000):  # 3 second timeout
                 self.worker.terminate()  # Force terminate if needed
+
+        # Always refresh the data sheet when the dialog closes so edits from
+        # batch processing are reflected even if the dialog was closed manually.
+        self.reload_data_sheet_csv(silent=True)
         event.accept()
