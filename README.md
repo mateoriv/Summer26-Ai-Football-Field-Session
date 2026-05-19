@@ -45,3 +45,7 @@ That's it—video thumbnails, CSV grids, and the virtual field should populate a
 - `AUTHORS.txt` – contributors and acknowledgements.
 
 See `docs.md` for expanded setup guidance and component notes, and `build_docs.md` for distributable build instructions.
+
+## Contributing
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before working on the project.
