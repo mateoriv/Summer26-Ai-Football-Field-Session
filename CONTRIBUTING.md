@@ -57,19 +57,19 @@ Each person creates their own branch.
 ## Example branch names
 
 ```bash
-git checkout -b mateo-ui-work
+git checkout -b mateo
 ```
 
 ```bash
-git checkout -b will-player-detection
+git checkout -b will
 ```
 
 ```bash
-git checkout -b caden-training-model
+git checkout -b caden
 ```
 
 ```bash
-git checkout -b toan-dataset-cleanup
+git checkout -b toan
 ```
 
 This command BOTH:
@@ -184,7 +184,7 @@ git pull
 ### 3. Switch back to your branch
 
 ```bash
-git checkout mateo-ui-work
+git checkout mateo
 ```
 
 Replace with YOUR branch name.
@@ -272,7 +272,7 @@ git push
 ```bash
 git checkout main
 git pull
-git checkout mateo-ui-work
+git checkout mateo
 git merge main
 ```
 
