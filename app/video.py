@@ -124,6 +124,10 @@ class CustomVideoWidget(QWidget):
         self.show_offense_selection = False
         self.offense_selection_frame = None
         self.offense_selection_points = []
+        self.formation_label = ""      # e.g. "TREY" (template formation = ours)
+        self.formation_score = None    # 0-1 match score, or None
+        self.formation_reliable = True
+        self.coach_label = ""          # the coach's recorded ground-truth label
         self.overlay_items = []
         self.cap = None
         self.total_frames = 0
@@ -166,6 +170,18 @@ class CustomVideoWidget(QWidget):
     def set_show_offense_selection(self, show):
         """Toggle highlighting of the selected 11 offensive players at the snap frame."""
         self.show_offense_selection = show
+        self.update()
+
+    def set_formation_label(self, label, score=None, reliable=True, coach=None):
+        """Set the recognized offense formation shown in the video corner.
+
+        `coach`: optional coach-recorded ground-truth label, drawn on a second
+        line so the viewer can eyeball OURS vs COACH against the field.
+        """
+        self.formation_label = label or ""
+        self.formation_score = score
+        self.formation_reliable = reliable
+        self.coach_label = coach or ""
         self.update()
     
     def update_frame(self):
@@ -234,6 +250,11 @@ class CustomVideoWidget(QWidget):
                 y_offset = (self.height() - scaled_pixmap.height()) // 2
                 painter.drawPixmap(x_offset, y_offset, scaled_pixmap)
 
+                # Recognized offense formation, drawn in the top-left corner of
+                # the video (over the frame, independent of the box toggles).
+                if self.formation_label:
+                    self._draw_formation_label(painter, x_offset, y_offset)
+
                 # If offense selection is enabled, draw small markers at the selected points
                 if getattr(self, "show_offense_selection", False) and self.offense_selection_points:
                     # Determine base video resolution (prefer detection metadata, fall back to frame size)
@@ -294,6 +315,54 @@ class CustomVideoWidget(QWidget):
             painter.drawText(self.rect(), Qt.AlignCenter, "No Video Loaded")
 
     
+    def _draw_formation_label(self, painter, x_offset, y_offset):
+        """Draw OUR predicted formation (and the coach's recorded label, if any)
+        in the video's top-left corner so the viewer can eyeball both against
+        the field at a glance."""
+        # Line 1: our prediction
+        ours_name = (self.formation_label or "").upper().replace("_", " ")
+        line1 = f"OURS: {ours_name}" if ours_name else "OURS: --"
+        if self.formation_score is not None:
+            line1 += f"  ({self.formation_score:.2f})"
+        if ours_name and not self.formation_reliable:
+            line1 += "  ?"
+
+        # Line 2: coach's recorded label (only if we have one)
+        coach_name = (self.coach_label or "").upper().strip()
+        line2 = f"COACH: {coach_name}" if coach_name else ""
+
+        font = QFont("Arial", 16, QFont.Bold)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        tw = max(fm.horizontalAdvance(line1), fm.horizontalAdvance(line2) if line2 else 0)
+        th = fm.height()
+        n_lines = 2 if line2 else 1
+
+        pad = 8
+        margin = 12
+        bx = x_offset + margin
+        by = y_offset + margin
+        bg_rect = QRectF(bx, by, tw + 2 * pad, th * n_lines + 2 * pad)
+        painter.fillRect(bg_rect, QBrush(QColor(0, 0, 0, 170)))
+
+        # Ours: green if reliable, amber if geometry flagged distorted.
+        ours_color = QColor(0, 255, 127) if self.formation_reliable else QColor(255, 191, 0)
+        painter.setPen(QPen(ours_color, 1))
+        painter.drawText(int(bx + pad), int(by + pad + fm.ascent()), line1)
+
+        if line2:
+            # Coach line: cyan when ours matches the coach base family (quick
+            # visual cue), white when names don't share a base, gray if no ours.
+            def base(s): return s.split()[0] if s else ""
+            if ours_name and base(ours_name) == base(coach_name):
+                coach_color = QColor(0, 200, 255)   # cyan = base match
+            elif ours_name:
+                coach_color = QColor(255, 255, 255) # white = mismatch
+            else:
+                coach_color = QColor(180, 180, 180) # gray = no ours yet
+            painter.setPen(QPen(coach_color, 1))
+            painter.drawText(int(bx + pad), int(by + pad + fm.ascent() + th), line2)
+
     def _get_detections_for_frame(self, frame_number, data_source):
         """
         [UNIFIED] Get detections for a specific frame number from a given data source (internal helper).
@@ -1199,6 +1268,58 @@ def set_current_video_path(parent, video_path):
         # If offense selection highlight is enabled, recompute it for the new video
         if getattr(parent.custom_video, "show_offense_selection", False):
             _compute_offense_selection_for_current_video(parent)
+
+    # Load the recognized offense formation for the corner overlay.
+    _load_formation_label_for_current_video(parent)
+
+
+def _load_formation_label_for_current_video(parent):
+    """Read the recognized formation for the current clip from the data CSV and
+    push it to the video widget's corner overlay (no-op if not yet processed)."""
+    try:
+        if not getattr(parent, "custom_video", None):
+            return
+        if not getattr(parent, "current_video_path", None) or not getattr(parent, "current_folder", None):
+            parent.custom_video.set_formation_label("")
+            return
+
+        video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
+        folder_name = os.path.basename(parent.current_folder.rstrip("/\\"))
+        data_csv = os.path.join(get_cache_dir(), folder_name, f"{folder_name}_data.csv")
+        if not os.path.exists(data_csv):
+            parent.custom_video.set_formation_label("")
+            return
+
+        df = pd.read_csv(data_csv)
+        row = df.loc[df["CLIP NAME"].astype(str) == video_name] if "CLIP NAME" in df.columns else None
+        if row is None or row.empty:
+            parent.custom_video.set_formation_label("")
+            return
+        row = row.iloc[0]
+
+        form = row.get("TEMPLATE FORM")
+        form_str = "" if pd.isna(form) else str(form).strip()
+        score = row.get("TEMPLATE SCORE")
+        score = float(score) if pd.notna(score) and str(score).strip() != "" else None
+        reliable_val = row.get("TEMPLATE RELIABLE")
+        reliable = str(reliable_val).strip().lower() != "false" if pd.notna(reliable_val) else True
+
+        # Coach's recorded ground-truth label (if this clip was hand-labeled).
+        coach_raw = row.get("COACH FORM") if "COACH FORM" in row.index else ""
+        coach_str = "" if pd.isna(coach_raw) else str(coach_raw).strip()
+
+        # Draw the overlay if we have either our prediction or the coach label.
+        if not form_str and not coach_str:
+            parent.custom_video.set_formation_label("")
+            return
+
+        parent.custom_video.set_formation_label(
+            form_str, score=score, reliable=reliable, coach=coach_str
+        )
+        print(f"[FORMATION] {video_name}: ours={form_str or '--'} "
+              f"coach={coach_str or '--'} score={score}")
+    except Exception as e:
+        print(f"[FORMATION] Could not load formation label: {e}")
 
 
 def _compute_offense_selection_for_current_video(parent):

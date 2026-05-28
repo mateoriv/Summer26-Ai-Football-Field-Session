@@ -268,9 +268,23 @@ def detect_snaps(
     # Smooth mover counts the same way for stability
     smoothed_movers = np.convolve(mover_counts.astype(np.float32), kernel, mode="same")
 
-    # Adaptive thresholds
-    calm_threshold  = np.percentile(smoothed, 30)
-    motion_threshold = np.percentile(smoothed, 70)
+    # Eligibility mask: frames below the player threshold were forced to
+    # velocity 0 in compute_velocity. On long clips that are ~half wide/huddle
+    # shots, those zeros dominate and drag the percentiles toward 0 --
+    # calm_threshold becomes exactly 0, the calm gate `pre_mean < 0` can never
+    # pass, and the detector finds 0 snaps. Compute thresholds over the eligible
+    # (enough-players) frames only so they reflect real motion.
+    if player_counts is not None and len(player_counts) == n:
+        eligible_mask = np.asarray(player_counts) >= min_players_per_frame
+    else:
+        eligible_mask = np.ones(n, dtype=bool)
+    valid_smoothed = smoothed[eligible_mask]
+    if len(valid_smoothed) < 5:
+        valid_smoothed = smoothed
+
+    # Adaptive thresholds (over eligible frames only)
+    calm_threshold  = np.percentile(valid_smoothed, 30)
+    motion_threshold = np.percentile(valid_smoothed, 70)
     accel = np.gradient(np.gradient(smoothed))
     accel_threshold = np.percentile(np.abs(accel), 80)
 

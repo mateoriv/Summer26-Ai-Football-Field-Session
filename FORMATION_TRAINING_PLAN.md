@@ -32,13 +32,101 @@ additional labels available beyond the current ~89 clips.
 
 ---
 
-## Phase 1 — Grow the labeled dataset (the unblock)
+## Guiding principle — do no harm, and don't out-run the data
+
+With ~89 clips across 24 classes, **no architecture rescues us** — a bigger
+or fancier model trained on the same tiny data overfits *harder*, not less.
+So the work is split into three buckets, and the dangerous ones are gated
+behind data and validation:
+
+1. **Free wins (no labels, no training risk).** Collapsing the label space
+   (taxonomy) and computing deterministic geometric attributes (shotgun /
+   alignment, box count). These help *with the data we already have* and
+   cannot make the model worse — they reduce what the learned model must
+   carry. **Do these first.**
+2. **Data-efficient modeling (gated on validation).** A permutation-invariant
+   DeepSets offense model. Worth building — it has a better inductive bias
+   than the flat MLP and is more data-*efficient* — but it only **ships** if
+   it beats the legacy model on held-out cross-validation folds.
+3. **Data-gated work (blocked until the dataset grows).** The defensive model
+   (zero labels exist today) and the pre-snap motion encoder (most parameters,
+   least data justification). These do **not** start until the labeled set
+   reaches the thresholds below.
+
+**Hard gates:**
+- The legacy `formModel.pt` stays the **default** predictor. A new model is
+  swapped in *only after* it beats the legacy model on stratified 5-fold CV
+  **and** on >100 unseen clips (Phase 5).
+- **Defense model:** blocked until **300+** defense-labeled clips exist.
+- **Motion encoder:** deferred until **500+** offense-labeled clips exist.
+
+---
+
+## Phase 0 — Geometric attributes (no ML, no labels)
+
+Some formation attributes are **measurements, not learned patterns**, and
+should never be pushed through a data-starved classifier. Computing them
+deterministically is reliable on day one and removes load from the model.
+
+### 0.1 QB alignment / shotgun
+- Read the raw per-frame detections in `cache/<video>/positions/*.json`
+  (the `positionDetection.pt` model emits a distinct `qb` class, separate
+  from `oline`).
+- Measure QB depth = separation between the QB and the offensive-line
+  centroid along the line-of-scrimmage normal, in field yards (use the
+  homography-projected coordinates so depth is in yards, not pixels).
+- Classify `under_center` / `pistol` / `shotgun` by depth thresholds
+  (≈ <1.5 / 1.5–4 / ≥4 yd; tune on real clips).
+- **Robustness (the QB label is not 100% reliable on 89 training clips):**
+  1. take the **highest-confidence** `qb` detection (handles duplicates);
+  2. if **no** `qb`, fall back to the **deepest offensive player behind the
+     `oline`** — the QB by geometry regardless of label;
+  3. flag low-confidence cases for review rather than guessing.
+
+### 0.2 Box count / safety depth (defense, no labels)
+- Count defenders inside the tackle box and measure deepest-safety depth
+  directly from projected coordinates. Useful as auxiliary inputs to the
+  defense model later, and meaningful on their own now.
+
+Output: emit these as columns alongside the formation prediction so the app
+shows them immediately, independent of any model retrain.
+
+---
+
+## Phase 1 — Hierarchical taxonomy (the free win, do first)
+
+The current 24 flat labels mix base formation and variation tags, so the
+model can't share signal between, e.g., "DALLAS WG" and "DALLAS Y OFF".
+Collapsing them is the **single change that helps with the data we already
+have**: ~24 classes at ~3 examples each becomes ~8 base classes at ~10 each.
+
+- New: `formations/taxonomy.json`
+  - `offense_base`: ~8–10 canonical base formations
+  - `offense_tags`: ~6 variation tags (multi-label)
+  - `defense_front`: ~8 fronts
+  - `defense_coverage`: ~6 coverages
+- New: `formations/taxonomy.py` — load and validate. Provides a
+  mapping from the **legacy 24-class labels** in
+  `models/offense_positions/metadata.json` to (base, tags) so existing
+  labels are not lost.
+- Pipeline output (Phase 5) emits: `OFF FORM` (base), `FORM VARIATION`
+  (comma-joined tags), `DEF FRONT`, `COVERAGE`, plus the Phase 0 geometric
+  columns (`QB ALIGN`, etc.).
+
+This phase is small, decoupled, and risk-free — it only relabels existing
+data into a coarser space.
+
+---
+
+## Phase 2 — Grow the labeled dataset (the unblock)
 
 Without more data, no architectural change matters. This phase is the
-biggest investment.
+biggest investment and the long pole for everything in bucket 3.
 
-### 1.1 Build a labeling tool
+### 2.1 Build a labeling tool
 - New file: `modelTraining/labeling_tool.py` (PySide6, reusing widgets from `app/`).
+- Uses the **taxonomy from Phase 1** for its label fields (build the taxonomy
+  first so the tool writes canonical labels from day one).
 - Inputs per clip, already produced by the existing pipeline:
   - snap-frame detections from `cache/<video>/snap_detections.json`
   - field-projected points from `scripts/perFrameHomographyTransform.py`
@@ -54,7 +142,7 @@ biggest investment.
   `cache/<video>/offense_positions.csv` and a new
   `cache/<video>/defense_positions.csv`.
 
-### 1.2 Active-learning ordering
+### 2.2 Active-learning ordering
 - Run the current offense model over all unlabeled snaps; sort by
   ascending top-1 confidence and present **low-confidence clips first**.
   This concentrates human effort on the examples the model is most
@@ -62,7 +150,7 @@ biggest investment.
 - Also surface clips whose top-2 classes are within 0.05 (boundary
   cases — the most useful supervision).
 
-### 1.3 Pseudo-label / cluster-assist
+### 2.3 Pseudo-label / cluster-assist
 - KMeans (k≈15) on the existing 29-D geometric feature vector → present
   one cluster at a time so the user labels visually-similar plays in
   batches (5–10× speedup vs. clip-by-clip).
@@ -70,51 +158,39 @@ biggest investment.
   `modelTraining/train_offense_positions.py` (centroid-centered features,
   pairwise distances, PCA eigenvalues) — do **not** re-implement.
 
-### 1.4 Augmentation (free data multiplier)
+### 2.4 Augmentation (free data multiplier)
 - Mirror plays left↔right (flip x around field centerline). Doubles the
   dataset and matches real symmetry of football formations.
 - Yard-line translation jitter (±10 yd along x); small Gaussian jitter
   per player (~0.3 yd) to simulate detection noise.
 - These belong in the dataset builder, not the model — see Phase 3.
 
-**Target by end of Phase 1:** 500+ offense-labeled clips, 500+
-defense-labeled clips.
+**Targets:** 300+ defense-labeled clips unblocks Phase 6; 500+
+offense-labeled clips unblocks Phase 7. Reach 200+ offense labels before
+starting Phase 3.
 
 ---
 
-## Phase 2 — Hierarchical taxonomy
-
-The current 24 flat labels mix base formation and variation tags, so the
-model can't share signal between, e.g., "DALLAS WG" and "DALLAS Y OFF".
-
-- New: `formations/taxonomy.json`
-  - `offense_base`: ~8–10 canonical base formations
-  - `offense_tags`: ~6 variation tags (multi-label)
-  - `defense_front`: ~8 fronts
-  - `defense_coverage`: ~6 coverages
-- New: `formations/taxonomy.py` — load and validate. Provides a
-  mapping from the **legacy 24-class labels** in
-  `models/offense_positions/metadata.json` to (base, tags) so existing
-  labels are not lost.
-- Pipeline output (Phase 7) emits: `OFF FORM` (base), `FORM VARIATION`
-  (comma-joined tags), `DEF FRONT`, `COVERAGE`.
-
----
-
-## Phase 3 — Permutation-invariant offense model
+## Phase 3 — Permutation-invariant offense model (gated on validation)
 
 Flat MLP on `[nx1, ny1, …, nx11, ny11]` is order-sensitive: the same
-formation with players in a different list order looks different.
+formation with players in a different list order looks different. DeepSets
+is more data-*efficient* (it bakes in permutation invariance instead of
+spending scarce examples learning it), but it still **ships only if it wins
+on cross-validation** — see the hard gate above. Start once 200+ labels exist.
 
 ### 3.1 Architecture: DeepSets (recommended first)
 Per-player encoder `φ(xᵢ, yᵢ, posᵢ)` → sum/mean pool → classifier head
 `ρ`. Naturally permutation-invariant.
 - Per-player input: `(x, y, position_class_onehot)` where
   `position_class` comes from `yolo_models/positionDetection.pt`
-  (QB, RB, WR, TE, OL — already in the pipeline).
+  (qb, running_back, wide_receiver, tight_end, oline — already in the
+  pipeline).
 - Two heads on the pooled embedding:
   - Base-formation head: softmax over `offense_base` (cross-entropy).
   - Tags head: sigmoid per tag (binary cross-entropy, multi-label).
+- Geometric attributes from Phase 0 (e.g. QB alignment) are fed as
+  deterministic inputs/columns — not learned by this model.
 
 ### 3.2 Why not the flat MLP
 - Current model: ~3K params, no symmetry priors → memorizes the 89-clip
@@ -134,16 +210,77 @@ accuracy plateaus.
 - Stratified 5-fold CV (the dataset is too small for a single
   train/val split — current code uses 80/20 which gives 17 val samples
   across 24 classes).
-- Class-weighted loss + the mirror/jitter augmentation from §1.4.
+- Class-weighted loss + the mirror/jitter augmentation from §2.4.
 - Save artifacts to `models/offense_formations_v2/` (do not overwrite
-  the legacy model until Phase 7 swap-in).
+  the legacy model — the swap-in is gated in Phase 5).
 
 ---
 
-## Phase 4 — Pre-snap motion encoder
+## Phase 4 — Robustness & validation (the gate mechanism)
 
-A static snap frame misses motion, shifts, and unstable alignments. Use
-the ~1.5 s pre-snap window the pipeline already tracks.
+This phase is *how* we decide whether Phase 3 is allowed to ship. Run it
+before any swap-in.
+
+- Stratified k-fold CV on every model (k=5).
+- Confusion matrix per fold; top-3 accuracy alongside top-1.
+- **Decision rule:** the v2 model swaps in only if it beats the legacy
+  model on base-formation top-1 (and does not regress top-3) across folds.
+- **Invariance tests** (new
+  `modelTraining/tests/test_invariance.py`):
+  - Mirror x → predicted base formation must be stable.
+  - Translate ±5 yd along y → must be stable.
+  - Add ±0.3 yd Gaussian jitter → top-1 must not flip more than ~5%
+    of the time.
+- Temperature scaling on validation logits to calibrate confidence
+  (current confidences of 0.15–0.30 are meaningless).
+
+---
+
+## Phase 5 — Integrate into the app (do no harm)
+
+- Edit `scripts/staticProcess.py` (lines ~160–370): add the v2 set-based
+  predictor and the Phase 0 geometric attributes; produce offense (and,
+  once available, defense) outputs per snap.
+- **The legacy `formModel.pt` remains the default**, behind a config flag.
+  The v2 model becomes default only after passing the Phase 4 gate **and**
+  beating the legacy model on >100 unseen clips. Rollback path stays until
+  then.
+- Edit `app/fileAccess.py` (line 314 has the CSV column dict): add
+  `'DEF FRONT': ""`, `'COVERAGE': ""`, `'QB ALIGN': ""`. `OFF FORM` and
+  `FORM VARIATION` already exist.
+- Edit `app/processingDialog.py` (line 177 — the static-process step)
+  to display new fields.
+
+---
+
+## Phase 6 — [DATA-GATED: 300+ defense labels] Defensive formation model
+
+Mirror the offense pipeline; defense was never modeled. **Hard-blocked
+until 300+ defense-labeled clips exist** — this is purely a data task today,
+not a modeling task.
+
+- New: `modelTraining/build_defense_positions_dataset.py` — same shape
+  as the offense builder, but selects the **defending 11** using the
+  `defense` class from `yolo_models/positionDetection.pt`.
+- New: `modelTraining/train_defense_positions.py` — same DeepSets
+  architecture as Phase 3, but two heads:
+  - `defense_front` (softmax)
+  - `defense_coverage` (softmax)
+- New: `models/defense_formations/{model.pt, metadata.json}`.
+- Defense benefits most from **box-count features** (number of defenders
+  in the tackle box, depth of safeties) — these come from Phase 0.2 and
+  are fed as deterministic per-player inputs so they survive permutation
+  invariance.
+
+---
+
+## Phase 7 — [DATA-GATED: 500+ offense labels, deferred] Pre-snap motion encoder
+
+A static snap frame misses motion, shifts, and unstable alignments. But a
+temporal model has the **most parameters and the least data justification**,
+so it is the textbook way to make things worse on a small set. **Deferred
+until 500+ offense-labeled clips exist**, and only if base accuracy is
+already healthy.
 
 - Reuse `scripts/perFrameHomographyTransform.py` output: per-frame
   field-coordinate tracks for each player.
@@ -161,54 +298,6 @@ the ~1.5 s pre-snap window the pipeline already tracks.
 
 ---
 
-## Phase 5 — Defensive formation model
-
-Mirror the offense pipeline; defense was never modeled.
-
-- New: `modelTraining/build_defense_positions_dataset.py` — same shape
-  as the offense builder, but selects the **defending 11** using the
-  Defense/Ref class from `yolo_models/positionDetection.pt`.
-- New: `modelTraining/train_defense_positions.py` — same DeepSets
-  architecture as Phase 3, but two heads:
-  - `defense_front` (softmax)
-  - `defense_coverage` (softmax)
-- New: `models/defense_formations/{model.pt, metadata.json}`.
-- Defense benefits most from **box-count features** (number of defenders
-  in the tackle box, depth of safeties) — compute these in the per-player
-  encoder so they survive permutation invariance.
-
----
-
-## Phase 6 — Robustness & validation
-
-- Stratified k-fold CV on every model (k=5).
-- Confusion matrix per fold; top-3 accuracy alongside top-1.
-- **Invariance tests** (new
-  `modelTraining/tests/test_invariance.py`):
-  - Mirror x → predicted base formation must be stable.
-  - Translate ±5 yd along y → must be stable.
-  - Add ±0.3 yd Gaussian jitter → top-1 must not flip more than ~5%
-    of the time.
-- Temperature scaling on validation logits to calibrate confidence
-  (current confidences of 0.15–0.30 are meaningless).
-
----
-
-## Phase 7 — Integrate into the app
-
-- Edit `scripts/staticProcess.py` (lines ~160–370): replace the legacy
-  flat-MLP call with the v2 set-based predictor; produce both
-  offense and defense outputs per snap.
-- Edit `app/fileAccess.py` (line 314 has the CSV column dict): add
-  `'DEF FRONT': ""`, `'COVERAGE': ""`. `OFF FORM` and `FORM VARIATION`
-  already exist.
-- Edit `app/processingDialog.py` (line 177 — the static-process step)
-  to display new fields.
-- Keep the legacy `formModel.pt` loadable via a config flag for a
-  rollback path until the v2 model is validated on >100 unseen clips.
-
----
-
 ## Critical files
 
 **Read / reuse (do not rewrite):**
@@ -223,23 +312,26 @@ Mirror the offense pipeline; defense was never modeled.
 - `scripts/staticProcess.py` (lines 160–370) — snap extraction +
   side-normalization logic.
 - `scripts/perFrameHomographyTransform.py` — per-frame field
-  projection; the motion encoder consumes its output unchanged.
-- `yolo_models/positionDetection.pt` — already separates
-  offense/defense; both new datasets depend on it.
+  projection; the motion encoder and Phase 0 depth measurement consume
+  its output unchanged.
+- `scripts/positionDetection.py` / `yolo_models/positionDetection.pt` —
+  classes: `defense, oline, qb, ref, running_back, tight_end,
+  wide_receiver`. Phase 0 and both new datasets depend on these.
 - `models/offense_positions/metadata.json` — legacy 24-class label
-  list, mapped into the new taxonomy in Phase 2.
+  list, mapped into the new taxonomy in Phase 1.
 
 **New files:**
-- `modelTraining/labeling_tool.py`
-- `modelTraining/build_offense_motion_dataset.py`
-- `modelTraining/build_defense_positions_dataset.py`
-- `modelTraining/train_offense_setmodel.py`
-- `modelTraining/train_defense_positions.py`
-- `modelTraining/tests/test_invariance.py`
 - `formations/taxonomy.json`
 - `formations/taxonomy.py`
+- `modelTraining/geometric_attributes.py` (Phase 0: QB alignment, box count)
+- `modelTraining/labeling_tool.py`
+- `modelTraining/train_offense_setmodel.py`
+- `modelTraining/tests/test_invariance.py`
 - `models/offense_formations_v2/` (artifacts)
-- `models/defense_formations/` (artifacts)
+- `modelTraining/build_defense_positions_dataset.py` (Phase 6, gated)
+- `modelTraining/train_defense_positions.py` (Phase 6, gated)
+- `models/defense_formations/` (Phase 6, gated)
+- `modelTraining/build_offense_motion_dataset.py` (Phase 7, deferred)
 
 **Edited:**
 - `scripts/staticProcess.py`
@@ -252,22 +344,29 @@ Mirror the offense pipeline; defense was never modeled.
 
 End-to-end checks, in order:
 
-1. **Labeling tool sanity.** Run `python modelTraining/labeling_tool.py
+1. **Geometric attributes (no training needed).** Run the Phase 0 module on
+   a processed `cache/<video>/` and confirm QB alignment
+   (under_center/pistol/shotgun) is emitted per clip, with the
+   deepest-back fallback firing when no `qb` is detected.
+2. **Taxonomy maps cleanly.** Confirm every legacy 24-class label maps to a
+   (base, tags) pair via `formations/taxonomy.py` with no label loss.
+3. **Labeling tool sanity.** Run `python modelTraining/labeling_tool.py
    --cache cache/TestingFootage/` — confirm a snap is rendered, a label
    can be saved, and a row is appended to
    `cache/TestingFootage/offense_positions.csv`.
-2. **Model trains.** Run
+4. **Model trains and clears the gate.** Run
    `python modelTraining/train_offense_setmodel.py --csv-path
    cache/TestingFootage/offense_positions.csv` and confirm 5-fold CV
-   metrics print. Top-1 base-formation accuracy on the existing 89
-   clips should already beat the legacy model (it will, since base
-   formation has only ~8 classes vs. 24).
-3. **Invariance tests pass.** `pytest
+   metrics print. Base-formation top-1 must **beat the legacy model** on
+   the same clips before any swap-in.
+5. **Invariance tests pass.** `pytest
    modelTraining/tests/test_invariance.py`.
-4. **App integration.** Open the app, run the pipeline on
-   `temptestingdata/` clips, and confirm the tracks CSV is populated
-   with `OFF FORM`, `FORM VARIATION`, `DEF FRONT`, `COVERAGE`.
-5. **Calibration.** Inspect a fresh
+6. **App integration, legacy still default.** Open the app, run the
+   pipeline on `temptestingdata/` clips, confirm the tracks CSV is
+   populated with `OFF FORM`, `FORM VARIATION`, `QB ALIGN` (and
+   `DEF FRONT`, `COVERAGE` once Phase 6 ships), while the legacy model
+   remains the default predictor until the gate is cleared.
+7. **Calibration.** Inspect a fresh
    `models/offense_formations_v2/play_predictions.csv` — confidences
    should span 0.5–0.95 (vs. the current 0.15–0.30) on the same clips.
 
@@ -275,14 +374,18 @@ End-to-end checks, in order:
 
 ## Suggested execution order
 
-The phases are written in dependency order, but in practice:
+Re-sequenced so nothing data-hungry ships before the data exists:
 
-1. Phases 1.1–1.3 (labeling tool) **first** — without it, nothing else
-   moves.
-2. Phase 2 (taxonomy) in parallel — small, decoupled.
-3. Phase 3 (set-based offense) once 200+ labels exist.
-4. Phase 5 (defense) once Phase 3 is working; the architectures are
-   identical, so it's mostly data work.
-5. Phase 4 (motion) **last** — biggest engineering effort, smallest
-   per-clip win, only meaningful once base accuracy is healthy.
-6. Phases 6–7 throughout.
+1. **Phase 1 (taxonomy)** and **Phase 0 (geometric attributes)** first —
+   both are free wins that help with the current 89 clips and carry no
+   overfitting risk.
+2. **Phase 2 (labeling tool + active learning + clustering)** — the unblock;
+   uses the Phase 1 taxonomy. Everything in bucket 3 waits on this.
+3. **Phase 3 (set-based offense)** once 200+ labels exist, **gated** by
+   **Phase 4 (validation)** — it ships only if it beats the legacy model.
+4. **Phase 5 (app integration)** with the legacy model still default until
+   the gate is cleared on >100 unseen clips.
+5. **Phase 6 (defense)** only after 300+ defense labels exist.
+6. **Phase 7 (motion)** **last and deferred** — only after 500+ offense
+   labels and a healthy base accuracy; biggest engineering effort, smallest
+   per-clip win, highest overfitting risk on small data.

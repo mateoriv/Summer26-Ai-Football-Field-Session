@@ -312,7 +312,10 @@ def create_video_based_csv(output_dir, video_files, folder_name=None):
             'BACKFIELD' : "",
             'FIB/FSL' : "",
             'OFF FORM' : "",
+            'TEMPLATE FORM': "",
+            'TEMPLATE SCORE': "",
             'FORM VARIATION': "",
+            'QB ALIGN': "",
             'SET': "",
             'WR SPLITS': "",
         }
