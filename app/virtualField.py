@@ -32,16 +32,17 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 
 class VirtualFieldWidget(QWidget):
     """Widget that displays a static football field with player dots"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
         self.current_frame = 0
         self.homography_data = None
+        self.offense_positions = None  # list of (nx, ny) yard coords for 11 offensive players
         self.field_image = None
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background-color: #2b2b2b; border: 1px solid #555555;")
-        
+
         # Load field image
         self.load_field_image()
         
@@ -110,6 +111,56 @@ class VirtualFieldWidget(QWidget):
             self.update()  # Force repaint to clear player dots
             return False
     
+    def load_offense_positions(self, video_name, folder_name):
+        """Load the 11 offensive player field positions from offense_positions.csv."""
+        try:
+            import pandas as pd
+            base_cache_dir = get_cache_dir()
+            csv_path = os.path.join(base_cache_dir, os.path.basename(folder_name), "offense_positions.csv")
+
+            if not os.path.exists(csv_path):
+                print(f"[Virtual Field] offense_positions.csv not found: {csv_path}")
+                self.offense_positions = None
+                self.update()
+                return False
+
+            df = pd.read_csv(csv_path)
+            if "clip_name" not in df.columns:
+                self.offense_positions = None
+                self.update()
+                return False
+
+            row = df.loc[df["clip_name"] == video_name]
+            if row.empty:
+                print(f"[Virtual Field] No offense row for '{video_name}'")
+                self.offense_positions = None
+                self.update()
+                return False
+
+            row = row.iloc[0]
+            positions = []
+            for i in range(1, 12):
+                nx_col, ny_col = f"nx{i}", f"ny{i}"
+                if nx_col in row and ny_col in row:
+                    nx, ny = row[nx_col], row[ny_col]
+                    if pd.notna(nx) and pd.notna(ny):
+                        positions.append((float(nx), float(ny)))
+
+            if positions:
+                self.offense_positions = positions
+                print(f"[Virtual Field] Loaded {len(positions)} offense positions for {video_name}")
+                self.update()
+                return True
+
+            self.offense_positions = None
+            self.update()
+            return False
+        except Exception as e:
+            print(f"[Virtual Field] Error loading offense positions: {e}")
+            self.offense_positions = None
+            self.update()
+            return False
+
     def set_current_frame(self, frame_number):
         """Set the current frame and update the display"""
         self.current_frame = frame_number
@@ -134,64 +185,43 @@ class VirtualFieldWidget(QWidget):
             scaled_field = self.field_image.scaled(field_width, field_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             painter.drawPixmap(field_x_offset, field_y_offset, scaled_field)
         
-        # Draw player dots if we have homography data
-        if self.homography_data and 'normalized_positions' in self.homography_data:
+        # Calculate field layout (shared by both draw paths)
+        field_width = min(self.width(), int(self.height() * 100 / 53.33))
+        field_height = min(self.height(), int(self.width() * 53.33 / 100))
+        field_x_offset = (self.width() - field_width) // 2
+        field_y_offset = (self.height() - field_height) // 2
+        field_left = field_x_offset
+        field_right = field_x_offset + field_width
+        field_top = field_y_offset
+        field_bottom = field_y_offset + field_height
+
+        def draw_dot(nx, ny, color):
+            wx = int(field_x_offset + (nx * field_width / 100))
+            wy = int(field_y_offset + field_height - (ny * field_height / 53.33))
+            if field_left <= wx <= field_right and field_top <= wy <= field_bottom:
+                painter.setBrush(QBrush(color))
+                painter.setPen(QPen(QColor(255, 255, 255), 3))
+                painter.drawEllipse(wx - 8, wy - 8, 16, 16)
+
+        if self.offense_positions is not None:
+            # Show only the 11 offensive players at the snap frame
+            offense_color = QColor(255, 165, 0)  # Orange
+            for nx, ny in self.offense_positions:
+                draw_dot(nx, ny, offense_color)
+        elif self.homography_data and 'normalized_positions' in self.homography_data:
+            # Fall back to all players from homography data
             normalized_positions = self.homography_data['normalized_positions']
             frame_key = str(self.current_frame)
-            
             if frame_key in normalized_positions:
-                players = normalized_positions[frame_key]
-                
-                # Draw each player as a dot
-                for i, player in enumerate(players):
-                    # Get coordinates from normalized_position
+                for player in normalized_positions[frame_key]:
                     normalized_pos = player.get('normalized_position', {})
                     x = normalized_pos.get('x', 0)
                     y = normalized_pos.get('y', 0)
-                    
-                    # Get object label (e.g., 'qb', 'defense')
                     object_label = player.get('object_label', 'player').lower()
-                    
-                    # Convert field coordinates to widget coordinates
-                    # Field is 100 yards long and 53.33 yards wide
-                    # (0,0) is bottom left corner of the field
-                    
-                    # Calculate field dimensions within the widget (accounting for aspect ratio)
-                    field_width = min(self.width(), int(self.height() * 100 / 53.33))
-                    field_height = min(self.height(), int(self.width() * 53.33 / 100))
-                    
-                    # Center the field in the widget
-                    field_x_offset = (self.width() - field_width) // 2
-                    field_y_offset = (self.height() - field_height) // 2
-                    
-                    # Map X: 0-100 yards to field_width pixels
-                    widget_x = int(field_x_offset + (x * field_width / 100))
-                    
-                    # Map Y: 0-53.33 yards to field_height pixels (flip Y so 0,0 is bottom)
-                    widget_y = int(field_y_offset + field_height - (y * field_height / 53.33))
-                    
-                    # Only draw if coordinates are within field bounds
-                    field_left = field_x_offset
-                    field_right = field_x_offset + field_width
-                    field_top = field_y_offset
-                    field_bottom = field_y_offset + field_height
-                    
-                    if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
-                        # Get color from the map, using 'player' as default fallback
-                        dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
-                        # dot_color = POSITION_COLORS['player']
-                        
-                        # Draw player dot - make it more visible
-                        painter.setBrush(QBrush(dot_color))  
-                        painter.setPen(QPen(QColor(255, 255, 255), 3))  # Thicker white border
-                        painter.drawEllipse(widget_x - 8, widget_y - 8, 16, 16)  # Larger dot
-                        
-                        # Draw object label text (Position Class)
-                        painter.setPen(QPen(QColor(255, 255, 255)))
-                        # Move text slightly below the center of the dot
-                        # painter.drawText(widget_x - 7, widget_y + 5, object_label.upper()) 
+                    dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
+                    draw_dot(x, y, dot_color)
 
-             
+
         
         # Draw frame number
         painter.setPen(QPen(QColor(0, 0, 0)))  # Black text
@@ -575,6 +605,12 @@ def load_homography_data_for_virtual_field(parent, video_name, folder_name):
     """Load homography data for the virtual field"""
     if hasattr(parent, 'virtual_field'):
         return parent.virtual_field.load_homography_data(video_name, folder_name)
+    return False
+
+def load_offense_positions_for_virtual_field(parent, video_name, folder_name):
+    """Load offensive player positions for the virtual field"""
+    if hasattr(parent, 'virtual_field'):
+        return parent.virtual_field.load_offense_positions(video_name, folder_name)
     return False
 
 def create_scoreboard(parent):

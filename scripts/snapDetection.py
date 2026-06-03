@@ -340,10 +340,10 @@ def detect_snaps(
                 + (future_avg - pre_mean)                  # reward big velocity jump
                 + float(smoothed_movers[i]) * 0.3         # reward many movers
             )
-            frame = int(i) - 2*fps
+            frame = max(0, int(i) - int(2 * fps))
             candidates.append({
                 "frame": int(frame),
-                "time": round(frame/ fps, 3),
+                "time": round(frame / fps, 3),
                 "confidence": float(confidence),
             })
 

@@ -595,6 +595,7 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
         if features is not None and os.path.isdir(model_dir):
             pred_label, confidence = _predict_play(features, model_dir)
             if pred_label is not None:
+                df["OFF FORM"] = df["OFF FORM"].astype(object)
                 df.at[video_row_index, "OFF FORM"] = pred_label
                 df.at[video_row_index, "OFF FORM CONFIDENCE"] = confidence
                 print(f"[INFO] Offense positions model: predicted_play={pred_label}, confidence={confidence:.3f}")

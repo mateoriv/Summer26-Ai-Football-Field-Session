@@ -1180,17 +1180,18 @@ def set_current_video_path(parent, video_path):
     # Load snap detection data for timeline markers
     load_snap_detection_data(parent, video_path)
     
-    # Load homography data for virtual field
+    # Load homography data and offense positions for virtual field
     if hasattr(parent, 'current_folder') and hasattr(parent, 'virtual_field'):
         video_name = os.path.splitext(os.path.basename(video_path))[0]
-        from virtualField import load_homography_data_for_virtual_field
+        from virtualField import load_homography_data_for_virtual_field, load_offense_positions_for_virtual_field
         homography_loaded = load_homography_data_for_virtual_field(parent, video_name, parent.current_folder)
         # If homography data not found, ensure virtual field is cleared
         if not homography_loaded:
-            # Clear the virtual field display
             if hasattr(parent, 'virtual_field'):
                 parent.virtual_field.current_frame = 0
                 parent.virtual_field.update()
+        # Load offense positions (clears to None if not available for this clip)
+        load_offense_positions_for_virtual_field(parent, video_name, parent.current_folder)
     
     # Sync the video widget's internal state with the parent's button states
     if hasattr(parent, 'custom_video'):
