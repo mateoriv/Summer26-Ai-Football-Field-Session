@@ -18,7 +18,25 @@ import torch
 import torch.nn.functional as F
 from itertools import combinations
 
-FIELD_WIDTH_YD = 160/3 
+FIELD_WIDTH_YD = 160/3
+
+# Template-based offense formation recognizer (no training, no labels).
+# Loaded lazily on first use so importing this module stays cheap.
+_TEMPLATE_CACHE = {"matcher": None, "templates": None, "tried": False}
+
+
+def _get_template_matcher():
+    """Lazily import the template matcher and load the 17 formations once."""
+    if not _TEMPLATE_CACHE["tried"]:
+        _TEMPLATE_CACHE["tried"] = True
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "formations"))
+            import template_matcher
+            _TEMPLATE_CACHE["matcher"] = template_matcher
+            _TEMPLATE_CACHE["templates"] = template_matcher.load_templates()
+        except Exception as e:
+            print(f"[INFO] Template formation matcher unavailable: {e}")
+    return _TEMPLATE_CACHE["matcher"], _TEMPLATE_CACHE["templates"]
 
 # --- Offense-11 extraction (same logic as build_offense_positions_dataset) ---
 
@@ -222,10 +240,35 @@ def _update_offense_positions_csv(base_cache_dir, folder_name, video_name, point
 def extract_geometric_features(features: torch.Tensor) -> torch.Tensor:
         # NORMALIZE FEATURES
         if isinstance(features, np.ndarray):
+            raw_coords_np = features.reshape(-1, 11, 2).astype(np.float32, copy=False)
             features = torch.from_numpy(features)
+        else:
+            raw_coords_np = features.reshape(-1, 11, 2).cpu().numpy().astype(np.float32, copy=False)
+
+        # QB-derived features, computed once on raw field-yard coords (BEFORE
+        # the field-scale normalization below), exactly mirroring the training
+        # pipeline so the predicted feature vector lines up with the trained
+        # one. If geometry is degenerate, returns zeros.
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "formations"))
+        from qb_anchored_matcher import qb_features_for_points  # lazy import (no torch dep)
+        qb_feats_np = np.stack(
+            [qb_features_for_points(raw_coords_np[i]) for i in range(raw_coords_np.shape[0])],
+            axis=0,
+        )
+        qb_feats = torch.from_numpy(qb_feats_np)
 
         features = features.float()
         coords = features.reshape(-1, 11, 2)
+
+        # 0. Field-scale normalize to match training (train_offense_positions.py):
+        #    raw homography coords are in yards (x~0-100, y~0-53.3); the model was
+        #    trained on coords divided by field size. Skipping this feeds features
+        #    ~50-100x too large and saturates the softmax.
+        FIELD_LENGTH = 100.0
+        FIELD_WIDTH = 160.0 / 3.0  # 53.333...
+        coords = coords.clone()
+        coords[:, :, 0] = coords[:, :, 0] / FIELD_LENGTH
+        coords[:, :, 1] = coords[:, :, 1] / FIELD_WIDTH
 
         # 1. Center (translation invariance)
         centroid = coords.mean(axis=1, keepdims=True)
@@ -289,7 +332,7 @@ def extract_geometric_features(features: torch.Tensor) -> torch.Tensor:
         eigvals = eigvals_sorted[:, -2:]
 
         # -------------------------------------------------
-        # Concatenate Everything
+        # Concatenate Everything (+ QB-derived features last, matches training)
         # -------------------------------------------------
         features = torch.cat(
             [
@@ -298,6 +341,7 @@ def extract_geometric_features(features: torch.Tensor) -> torch.Tensor:
                 mean_pairwise_distance,
                 centroid_features,
                 eigvals,
+                qb_feats,
             ],
             dim=1,
         )
@@ -588,6 +632,50 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
         elif pts_err:
             print(f"[INFO] Offense positions CSV skipped: {pts_err}")
 
+        # Template-based formation recognition. Calls recognize_from_cache so the
+        # matcher uses the tracked + role-aware path automatically when the
+        # positions JSON has track_ids (new ByteTrack detector); otherwise it
+        # falls back to the legacy 11-generic-point path. Written to its own
+        # columns so the legacy OFF FORM model output is left untouched.
+        matcher, _ = _get_template_matcher()
+        if matcher is not None:
+            tm_result = matcher.recognize_from_cache(video_name, folder_name, base_cache_dir)
+            if tm_result.get("formation"):
+                for col in ("TEMPLATE FORM", "TEMPLATE SCORE", "TEMPLATE RELIABLE", "TEMPLATE METHOD"):
+                    if col not in df.columns:
+                        df[col] = ""
+                df.at[video_row_index, "TEMPLATE FORM"] = tm_result["formation"]
+                df.at[video_row_index, "TEMPLATE SCORE"] = tm_result["score"]
+                df.at[video_row_index, "TEMPLATE RELIABLE"] = bool(tm_result["reliable"])
+                df.at[video_row_index, "TEMPLATE METHOD"] = tm_result.get("method", "legacy")
+                print(f"[INFO] Template formation: {tm_result['formation']} "
+                      f"(score={tm_result['score']}, reliable={tm_result['reliable']}, "
+                      f"method={tm_result.get('method','legacy')})")
+            else:
+                print(f"[INFO] Template formation skipped: {tm_result.get('reason')}")
+
+        # QB-anchored template matcher (A/B against the legacy template matcher
+        # and the MLP). Geometrically pins QB->Q and (when found) TE->Y/U
+        # before Hungarian assignment; written to its own QB FORM columns.
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "formations"))
+            import qb_anchored_matcher
+            qa_result = qb_anchored_matcher.recognize_from_cache(video_name, folder_name, base_cache_dir)
+            if qa_result.get("formation"):
+                for col in ("QB FORM", "QB SCORE", "QB RELIABLE", "QB TE COUNT"):
+                    if col not in df.columns:
+                        df[col] = ""
+                df.at[video_row_index, "QB FORM"] = qa_result["formation"]
+                df.at[video_row_index, "QB SCORE"] = qa_result["score"]
+                df.at[video_row_index, "QB RELIABLE"] = bool(qa_result["reliable"])
+                df.at[video_row_index, "QB TE COUNT"] = int(qa_result.get("te_count", 0))
+                print(f"[INFO] QB-anchored formation: {qa_result['formation']} "
+                      f"(score={qa_result['score']}, te_count={qa_result.get('te_count')})")
+            else:
+                print(f"[INFO] QB-anchored formation skipped: {qa_result.get('reason')}")
+        except Exception as _e:
+            print(f"[INFO] QB-anchored matcher error: {_e}")
+
         # Offense positions model: same 11-offense features as dataset builder, then predict
         proot = project_root if project_root is not None else _get_project_root()
         model_dir = os.path.join(proot, "models", "offense_positions")
@@ -600,6 +688,29 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
                 print(f"[INFO] Offense positions model: predicted_play={pred_label}, confidence={confidence:.3f}")
         elif fe_err:
             print(f"[INFO] Offense model skipped: {fe_err}")
+
+        # QB alignment / shotgun (geometric -- no model, no labels).
+        try:
+            from shotgunDetection import detect_alignment
+            snap_path = os.path.join(base_cache_dir, folder_name, "snap_detection", f"{video_name}_snap_detection.json")
+            pos_path = os.path.join(base_cache_dir, folder_name, "positions", f"{video_name}_position.json")
+            corr_path = os.path.join(base_cache_dir, folder_name, "correspondence", f"{video_name}_correspondence.json")
+            if all(os.path.exists(p) for p in (snap_path, pos_path, corr_path)):
+                with open(snap_path) as _f:
+                    _snaps = (json.load(_f).get("snaps") or [])
+                if _snaps:
+                    with open(pos_path) as _f:
+                        _positions = json.load(_f)
+                    with open(corr_path) as _f:
+                        _corr = json.load(_f).get("frame_correspondences", {})
+                    _align = detect_alignment(_snaps[0].get("frame"), _positions, _corr)
+                    df.at[video_row_index, "QB ALIGN"] = _align.get("alignment", "unknown")
+                    if _align.get("qb_depth_yd") is not None:
+                        df.at[video_row_index, "QB DEPTH"] = _align.get("qb_depth_yd")
+                    print(f"[INFO] QB alignment: {_align.get('alignment')} "
+                          f"(depth={_align.get('qb_depth_yd')}, method={_align.get('method')})")
+        except Exception as _e:
+            print(f"[INFO] QB alignment skipped: {_e}")
 
         # Calculate median x position and round to nearest integer (use o_side from get_offense_points_for_video)
         if x_positions:

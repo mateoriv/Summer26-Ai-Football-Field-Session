@@ -33,6 +33,7 @@ By default the script:
 import argparse
 import json
 import os
+import sys
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -42,6 +43,13 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch.nn.functional as F
 from itertools import combinations
+
+# QB-derived geometric features (qb_lateral, qb_depth, te_left, te_right, ol_span).
+# These are computed in raw field yards from the 11 (x,y) points BEFORE the
+# centroid-centered/field-scaled features below, so they encode role-aware
+# geometry the role-blind base features cannot represent.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "formations"))
+from qb_anchored_matcher import qb_features_for_points, QB_FEATURE_NAMES  # noqa: E402
 
 class PositionsDataset(Dataset):
     """
@@ -157,7 +165,19 @@ class PositionsDataset(Dataset):
         FIELD_WIDTH  = 160.0 / 3.0  # 53.333...
 
         if isinstance(features, np.ndarray):
+            raw_coords_np = features.reshape(-1, 11, 2).astype(np.float32, copy=False)
             features = torch.from_numpy(features)
+        else:
+            raw_coords_np = features.reshape(-1, 11, 2).cpu().numpy().astype(np.float32, copy=False)
+
+        # QB-derived features in raw field yards, per sample, before any
+        # centroid/scale transform. Computed once on the raw coords so the QB
+        # geometry is in real yards (matches the inference path in staticProcess).
+        qb_feats_np = np.stack(
+            [qb_features_for_points(raw_coords_np[i]) for i in range(raw_coords_np.shape[0])],
+            axis=0,
+        )
+        qb_feats = torch.from_numpy(qb_feats_np)
 
         features = features.float()
         coords = features.reshape(-1, 11, 2)
@@ -228,7 +248,7 @@ class PositionsDataset(Dataset):
         eigvals = eigvals_sorted[:, -2:]
 
         # -------------------------------------------------
-        # Concatenate Everything
+        # Concatenate Everything (+ QB-derived features last)
         # -------------------------------------------------
         features = torch.cat(
             [
@@ -237,6 +257,7 @@ class PositionsDataset(Dataset):
                 mean_pairwise_distance,
                 centroid_features,
                 eigvals,
+                qb_feats,
             ],
             dim=1,
         )
