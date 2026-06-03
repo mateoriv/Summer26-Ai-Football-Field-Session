@@ -8,7 +8,14 @@ from PySide6.QtCore import Qt
 import sys
 import os
 import json
-import darkdetect
+try:
+    import darkdetect
+except (ValueError, ImportError):
+    class _DarkDetectFallback:
+        @staticmethod
+        def isDark():
+            return False
+    darkdetect = _DarkDetectFallback()
 from video import create_video_dock, set_current_video_path
 from fileAccess import create_file_dock
 from dataSheet import create_data_sheet_dock

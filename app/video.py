@@ -124,9 +124,16 @@ class CustomVideoWidget(QWidget):
         self.show_offense_selection = False
         self.offense_selection_frame = None
         self.offense_selection_points = []
-        self.formation_label = ""      # e.g. "TREY" (template formation = ours)
-        self.formation_score = None    # 0-1 match score, or None
-        self.formation_reliable = True
+        # A/B labels in the top-left corner:
+        #   M  = MLP model (offense_positions). source: OFF FORM column
+        #   QB = QB-anchored template matcher.   source: QB FORM column
+        # Both are shown side-by-side so reviewers can eyeball them against the
+        # field. COACH (ground truth) is drawn on a third line when present.
+        self.model_label = ""
+        self.model_confidence = None
+        self.qb_label = ""
+        self.qb_score = None
+        self.qb_reliable = True
         self.coach_label = ""          # the coach's recorded ground-truth label
         self.overlay_items = []
         self.cap = None
@@ -172,15 +179,18 @@ class CustomVideoWidget(QWidget):
         self.show_offense_selection = show
         self.update()
 
-    def set_formation_label(self, label, score=None, reliable=True, coach=None):
-        """Set the recognized offense formation shown in the video corner.
+    def set_formation_labels(self, model=None, model_conf=None,
+                             qb=None, qb_score=None, qb_reliable=True, coach=None):
+        """Set the M (model) and QB (QB-anchored matcher) labels shown in the
+        video corner, plus an optional COACH ground-truth label.
 
-        `coach`: optional coach-recorded ground-truth label, drawn on a second
-        line so the viewer can eyeball OURS vs COACH against the field.
+        Pass empty string / None to clear any field.
         """
-        self.formation_label = label or ""
-        self.formation_score = score
-        self.formation_reliable = reliable
+        self.model_label = model or ""
+        self.model_confidence = model_conf
+        self.qb_label = qb or ""
+        self.qb_score = qb_score
+        self.qb_reliable = qb_reliable
         self.coach_label = coach or ""
         self.update()
     
@@ -252,7 +262,7 @@ class CustomVideoWidget(QWidget):
 
                 # Recognized offense formation, drawn in the top-left corner of
                 # the video (over the frame, independent of the box toggles).
-                if self.formation_label:
+                if self.model_label or self.qb_label or self.coach_label:
                     self._draw_formation_label(painter, x_offset, y_offset)
 
                 # If offense selection is enabled, draw small markers at the selected points
@@ -316,52 +326,89 @@ class CustomVideoWidget(QWidget):
 
     
     def _draw_formation_label(self, painter, x_offset, y_offset):
-        """Draw OUR predicted formation (and the coach's recorded label, if any)
-        in the video's top-left corner so the viewer can eyeball both against
-        the field at a glance."""
-        # Line 1: our prediction
-        ours_name = (self.formation_label or "").upper().replace("_", " ")
-        line1 = f"OURS: {ours_name}" if ours_name else "OURS: --"
-        if self.formation_score is not None:
-            line1 += f"  ({self.formation_score:.2f})"
-        if ours_name and not self.formation_reliable:
-            line1 += "  ?"
+        """Top-left corner overlay (option 1: M is the answer, QB is a check).
 
-        # Line 2: coach's recorded label (only if we have one)
+        Lines drawn (only when their source is present):
+          M:    <model formation> (conf)  [✓ | ?]   <- MLP, headline
+                ✓ when QB agrees on base family, ? when it disagrees,
+                no badge when QB has no opinion.
+          QB:   <qb formation> (score)              <- supporting label
+          COACH:<ground truth>                      <- when hand-labeled
+        """
+        def fmt_name(s):
+            return (s or "").upper().replace("_", " ")
+        def base(s):
+            parts = s.split() if s else []
+            return parts[0] if parts else ""
+
+        model_name = fmt_name(self.model_label)
+        qb_name = fmt_name(self.qb_label)
         coach_name = (self.coach_label or "").upper().strip()
-        line2 = f"COACH: {coach_name}" if coach_name else ""
+
+        agree = bool(model_name and qb_name and base(model_name) == base(qb_name))
+        disagree = bool(model_name and qb_name and not agree)
+
+        lines = []  # (text, color)
+        if self.model_label:
+            text = f"M: {model_name or '--'}"
+            if self.model_confidence is not None:
+                try:
+                    text += f"  ({float(self.model_confidence):.2f})"
+                except (TypeError, ValueError):
+                    pass
+            if agree:
+                text += "  ✓"          # check: QB confirms M
+                m_color = QColor(0, 255, 127)
+            elif disagree:
+                text += "  ?"                # QB disagrees with M
+                m_color = QColor(255, 191, 0)
+            else:
+                m_color = QColor(0, 200, 255) # M alone, no QB to compare
+            lines.append((text, m_color))
+
+        if self.qb_label:
+            text = f"QB: {qb_name or '--'}"
+            if self.qb_score is not None:
+                try:
+                    text += f"  ({float(self.qb_score):.2f})"
+                except (TypeError, ValueError):
+                    pass
+            if not self.qb_reliable:
+                text += "  ?"
+            qb_color = QColor(180, 180, 180)  # always muted: QB is a supporting label
+            lines.append((text, qb_color))
+
+        if coach_name:
+            text = f"COACH: {coach_name}"
+            if model_name and base(model_name) == base(coach_name):
+                c_color = QColor(0, 200, 255)    # M matches coach
+            elif qb_name and base(qb_name) == base(coach_name):
+                c_color = QColor(0, 200, 255)    # QB matches coach (but not M)
+            elif model_name or qb_name:
+                c_color = QColor(255, 255, 255)  # mismatch
+            else:
+                c_color = QColor(180, 180, 180)
+            lines.append((text, c_color))
+
+        if not lines:
+            return
 
         font = QFont("Arial", 16, QFont.Bold)
         painter.setFont(font)
         fm = painter.fontMetrics()
-        tw = max(fm.horizontalAdvance(line1), fm.horizontalAdvance(line2) if line2 else 0)
+        tw = max(fm.horizontalAdvance(t) for t, _ in lines)
         th = fm.height()
-        n_lines = 2 if line2 else 1
 
         pad = 8
         margin = 12
         bx = x_offset + margin
         by = y_offset + margin
-        bg_rect = QRectF(bx, by, tw + 2 * pad, th * n_lines + 2 * pad)
+        bg_rect = QRectF(bx, by, tw + 2 * pad, th * len(lines) + 2 * pad)
         painter.fillRect(bg_rect, QBrush(QColor(0, 0, 0, 170)))
 
-        # Ours: green if reliable, amber if geometry flagged distorted.
-        ours_color = QColor(0, 255, 127) if self.formation_reliable else QColor(255, 191, 0)
-        painter.setPen(QPen(ours_color, 1))
-        painter.drawText(int(bx + pad), int(by + pad + fm.ascent()), line1)
-
-        if line2:
-            # Coach line: cyan when ours matches the coach base family (quick
-            # visual cue), white when names don't share a base, gray if no ours.
-            def base(s): return s.split()[0] if s else ""
-            if ours_name and base(ours_name) == base(coach_name):
-                coach_color = QColor(0, 200, 255)   # cyan = base match
-            elif ours_name:
-                coach_color = QColor(255, 255, 255) # white = mismatch
-            else:
-                coach_color = QColor(180, 180, 180) # gray = no ours yet
-            painter.setPen(QPen(coach_color, 1))
-            painter.drawText(int(bx + pad), int(by + pad + fm.ascent() + th), line2)
+        for i, (text, color) in enumerate(lines):
+            painter.setPen(QPen(color, 1))
+            painter.drawText(int(bx + pad), int(by + pad + fm.ascent() + i * th), text)
 
     def _get_detections_for_frame(self, frame_number, data_source):
         """
@@ -1274,50 +1321,63 @@ def set_current_video_path(parent, video_path):
 
 
 def _load_formation_label_for_current_video(parent):
-    """Read the recognized formation for the current clip from the data CSV and
-    push it to the video widget's corner overlay (no-op if not yet processed)."""
+    """Read the M/QB/COACH labels for the current clip from the data CSV and
+    push them to the video widget's corner overlay (no-op when not processed).
+
+    M  <- OFF FORM (+ OFF FORM CONFIDENCE)         (MLP model)
+    QB <- QB FORM (+ QB SCORE, QB RELIABLE)        (QB-anchored matcher)
+    COACH <- COACH FORM
+    """
     try:
         if not getattr(parent, "custom_video", None):
             return
+        clear = parent.custom_video.set_formation_labels
         if not getattr(parent, "current_video_path", None) or not getattr(parent, "current_folder", None):
-            parent.custom_video.set_formation_label("")
+            clear()
             return
 
         video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
         folder_name = os.path.basename(parent.current_folder.rstrip("/\\"))
         data_csv = os.path.join(get_cache_dir(), folder_name, f"{folder_name}_data.csv")
         if not os.path.exists(data_csv):
-            parent.custom_video.set_formation_label("")
+            clear()
             return
 
         df = pd.read_csv(data_csv)
         row = df.loc[df["CLIP NAME"].astype(str) == video_name] if "CLIP NAME" in df.columns else None
         if row is None or row.empty:
-            parent.custom_video.set_formation_label("")
+            clear()
             return
         row = row.iloc[0]
 
-        form = row.get("TEMPLATE FORM")
-        form_str = "" if pd.isna(form) else str(form).strip()
-        score = row.get("TEMPLATE SCORE")
-        score = float(score) if pd.notna(score) and str(score).strip() != "" else None
-        reliable_val = row.get("TEMPLATE RELIABLE")
-        reliable = str(reliable_val).strip().lower() != "false" if pd.notna(reliable_val) else True
+        def s(col):
+            v = row.get(col) if col in row.index else ""
+            return "" if pd.isna(v) else str(v).strip()
 
-        # Coach's recorded ground-truth label (if this clip was hand-labeled).
-        coach_raw = row.get("COACH FORM") if "COACH FORM" in row.index else ""
-        coach_str = "" if pd.isna(coach_raw) else str(coach_raw).strip()
+        def f(col):
+            v = row.get(col) if col in row.index else None
+            if v is None or pd.isna(v):
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
 
-        # Draw the overlay if we have either our prediction or the coach label.
-        if not form_str and not coach_str:
-            parent.custom_video.set_formation_label("")
-            return
+        model_form = s("OFF FORM")
+        model_conf = f("OFF FORM CONFIDENCE")
+        qb_form = s("QB FORM")
+        qb_score = f("QB SCORE")
+        qb_reliable_raw = s("QB RELIABLE")
+        qb_reliable = qb_reliable_raw.lower() != "false" if qb_reliable_raw else True
+        coach_form = s("COACH FORM")
 
-        parent.custom_video.set_formation_label(
-            form_str, score=score, reliable=reliable, coach=coach_str
+        parent.custom_video.set_formation_labels(
+            model=model_form, model_conf=model_conf,
+            qb=qb_form, qb_score=qb_score, qb_reliable=qb_reliable,
+            coach=coach_form,
         )
-        print(f"[FORMATION] {video_name}: ours={form_str or '--'} "
-              f"coach={coach_str or '--'} score={score}")
+        print(f"[FORMATION] {video_name}: M={model_form or '--'} "
+              f"QB={qb_form or '--'} coach={coach_form or '--'}")
     except Exception as e:
         print(f"[FORMATION] Could not load formation label: {e}")
 
