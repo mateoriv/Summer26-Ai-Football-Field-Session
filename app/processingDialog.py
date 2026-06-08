@@ -19,90 +19,15 @@ import time
 from pathlib import Path
 import pandas as pd
 
-def get_project_root():
-    """Return the project root, accounting for PyInstaller one-file extraction."""
-    # Import here to avoid circular imports
-    from fileAccess import get_project_root as get_root
-    return get_root()
-
-def get_cache_dir():
-    """Get the cache directory path."""
-    # Import here to avoid circular imports
-    from fileAccess import get_cache_dir as get_cache
-    return get_cache()
-
-def get_resource_path(*relative_parts):
-    """Build an absolute path rooted at the project directory or _MEIPASS when compiled."""
-    if hasattr(sys, "_MEIPASS"):
-        # Running as compiled executable - scripts are in _MEIPASS
-        return os.path.join(sys._MEIPASS, *relative_parts)
-    else:
-        # Running in development mode
-        return os.path.join(get_project_root(), *relative_parts)
-
-
-def get_python_executable():
-    """Get the correct Python executable for the current platform
-    
-    When running as a PyInstaller executable, returns sys.executable.
-    When running in development, returns the system Python executable.
-    """
-    # If running as PyInstaller bundle, use sys.executable
-    if hasattr(sys, "_MEIPASS") or getattr(sys, 'frozen', False):
-        return sys.executable
-    
-    # Running in development mode - use system Python
-    if sys.platform.startswith('win'):
-        # On Windows, try 'python' first, then 'python3'
-        for cmd in ['python', 'python3']:
-            try:
-                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    return cmd
-            except FileNotFoundError:
-                continue
-        return 'python'  # Fallback
-    else:
-        # On Unix-like systems, try 'python3' first, then 'python'
-        for cmd in ['python3', 'python']:
-            try:
-                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    return cmd
-            except FileNotFoundError:
-                continue
-        return 'python3'  # Fallback
-
-def build_script_command(script_path, *args):
-    """Build a command to run a Python script, handling PyInstaller bundles correctly.
-    
-    Args:
-        script_path: Path to the Python script
-        *args: Additional command-line arguments for the script
-    
-    Returns:
-        Tuple of (command_list, env_dict, script_path) for PyInstaller mode
-        Or just command_list for development mode
-    """
-    python_exe = get_python_executable()
-    
-    if hasattr(sys, "_MEIPASS") or getattr(sys, 'frozen', False):
-        # For PyInstaller: use environment variable to signal script execution mode
-        # The application.py will check this and run the script instead of launching GUI
-        env = os.environ.copy()
-        env['PYINSTALLER_RUN_SCRIPT'] = script_path
-        
-        # Build sys.argv for the script (pipe-separated for safety)
-        argv_items = [os.path.basename(script_path)] + [str(arg) for arg in args]
-        argv_str = '|'.join(argv_items)
-        env['PYINSTALLER_SCRIPT_ARGV'] = argv_str
-        
-        # Return command (just the executable), env dict, and script path
-        # The _run_command method will need to use the env
-        return ([python_exe], env, script_path)
-    else:
-        # Development mode: normal execution
-        return ([python_exe, script_path] + list(args), None, None)
+# Script-execution helpers live in scriptUtils so they can be shared with the
+# batch dialog and unit-tested without importing Qt.
+from scriptUtils import (
+    get_project_root,
+    get_cache_dir,
+    get_resource_path,
+    get_python_executable,
+    build_script_command,
+)
 
 class ProcessingWorker(QThread):
     """Worker thread for processing video"""
@@ -129,6 +54,9 @@ class ProcessingWorker(QThread):
         self.is_cancelled = False
         self.current_step = 0
         self.video_name = None
+        # When True, every step is re-run even if its output already exists.
+        # When False, any already-completed step is skipped silently (no prompt).
+        self.force_rerun = False
         self.detection_output = None
         self.homography_output = None
         
@@ -207,8 +135,21 @@ class ProcessingWorker(QThread):
             print(f"Error checking CSV augmentation: {e}")
             return False  # On error, assume not augmented
     
+    def resolve_video_name(self):
+        """Compute and cache the video name (without extension)."""
+        if not self.video_name:
+            self.video_name = Path(self.video_path).stem
+            if not self.video_name:
+                self.video_name = os.path.splitext(os.path.basename(self.video_path))[0]
+        return self.video_name
+
+    def all_steps_completed(self):
+        """Return True if every processing step already has output on disk."""
+        self.resolve_video_name()
+        return all(self.check_step_completed(i) for i in range(7))
+
     def check_step_completed(self, step_index):
-        """Check if a processing step has already been completed""" 
+        """Check if a processing step has already been completed"""
         if step_index == 0:  # Player Detection
             detection_file = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
             return os.path.exists(detection_file)
@@ -294,17 +235,14 @@ class ProcessingWorker(QThread):
             os.makedirs(self.output_dir + "/" + self.video_folder, exist_ok=True)
             
             # Get video filename without extension
-            if not self.video_name:
-                self.video_name = Path(self.video_path).stem
-                if not self.video_name:
-                    # Fallback: extract from filename manually
-                    self.video_name = os.path.splitext(os.path.basename(self.video_path))[0]
+            self.resolve_video_name()
+            if self.current_step == 0:
                 self.output_received.emit(f"Processing video: {self.video_path}")
                 self.output_received.emit(f"Video name extracted: {self.video_name}")
                 self.output_received.emit(f"Output directory: {self.output_dir}")
                 self.output_received.emit("-" * 50)
 
-                
+
             self.detection_output = f"{self.output_dir}/{self.video_folder}/players/{self.video_name}_detection.json"
             self.position_output = f"{self.output_dir}/{self.video_folder}/positions/{self.video_name}_position.json"
             self.snap_output = f"{self.output_dir}/{self.video_folder}/snap_detection/{self.video_name}_snap_detection.json"
@@ -323,20 +261,11 @@ class ProcessingWorker(QThread):
                 step_name = "Player Detection"
                 self.output_received.emit(f"Step 1: Checking {step_name}...")
                 
-                # Check if step is already completed
-                if self.check_step_completed(0):
-                    self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 0)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name} - using existing results")
-                        self.step_completed.emit(step_name, True)
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
+                # Skip silently if already done (unless a full re-run was requested)
+                if self.check_step_completed(0) and not self.force_rerun:
+                    self.output_received.emit(f"✓ {step_name} already completed - using existing results")
+                    self.step_completed.emit(step_name, True)
+                    return
                 
                 self.progress_updated.emit(0, "Step 1: Initializing player detection...")
                 self.output_received.emit("Step 1: Running player detection...")
@@ -367,20 +296,11 @@ class ProcessingWorker(QThread):
                 step_name = "Snap Detection"
                 self.output_received.emit(f"Step 2: Checking {step_name}...")
                 
-                # Check if step is already completed
-                if self.check_step_completed(1):
-                    self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 1)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name} - using existing results")
-                        self.step_completed.emit(step_name, True)
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
+                # Skip silently if already done (unless a full re-run was requested)
+                if self.check_step_completed(1) and not self.force_rerun:
+                    self.output_received.emit(f"✓ {step_name} already completed - using existing results")
+                    self.step_completed.emit(step_name, True)
+                    return
                 
                 self.progress_updated.emit(0, "Step 2: Initializing snap detection...")
                 self.output_received.emit("Step 2: Running snap detection...")
@@ -410,20 +330,11 @@ class ProcessingWorker(QThread):
                 step_name = "Position Detection"
                 self.output_received.emit(f"Step 3: Checking {step_name}...")
                 
-                # Check if step is already completed
-                if self.check_step_completed(2):
-                    self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 2)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name} - using existing results")
-                        self.step_completed.emit(step_name, True)
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
+                # Skip silently if already done (unless a full re-run was requested)
+                if self.check_step_completed(2) and not self.force_rerun:
+                    self.output_received.emit(f"✓ {step_name} already completed - using existing results")
+                    self.step_completed.emit(step_name, True)
+                    return
                 
                 self.progress_updated.emit(0, "Step 3: Initializing position detection...")
                 self.output_received.emit("Step 3: Running position detection on snap frame...")
@@ -464,20 +375,11 @@ class ProcessingWorker(QThread):
                 step_name = "Yard Marker Detection"
                 self.output_received.emit(f"Step 4: Checking {step_name}...")
                 
-                # Check if step is already completed
-                if self.check_step_completed(3):
-                    self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 3)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name} - using existing results")
-                        self.step_completed.emit(step_name, True)
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
+                # Skip silently if already done (unless a full re-run was requested)
+                if self.check_step_completed(3) and not self.force_rerun:
+                    self.output_received.emit(f"✓ {step_name} already completed - using existing results")
+                    self.step_completed.emit(step_name, True)
+                    return
                 
                 self.progress_updated.emit(0, "Step 4: Initializing yard marker detection...")
                 self.output_received.emit("Step 4: Running yard marker detection...")
@@ -508,24 +410,15 @@ class ProcessingWorker(QThread):
                 step_name = "Correspondence Points Generation"
                 self.output_received.emit(f"Step 5: Checking {step_name}...")
                 
-                # Check if step is already completed
-                if self.check_step_completed(4):
-                    self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 4)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name} - using existing results")
-                        # Update virtual field with existing correspondence points
-                        correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
-                        from virtualField import update_field_with_correspondence_points
-                        update_field_with_correspondence_points(self.parent(), correspondence_output, frame_number=0)
-                        self.step_completed.emit(step_name, True)
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
+                # Skip silently if already done (unless a full re-run was requested)
+                if self.check_step_completed(4) and not self.force_rerun:
+                    self.output_received.emit(f"✓ {step_name} already completed - using existing results")
+                    # Update virtual field with existing correspondence points
+                    correspondence_output = f"{self.output_dir}/{self.video_folder}/correspondence/{self.video_name}_correspondence.json"
+                    from virtualField import update_field_with_correspondence_points
+                    update_field_with_correspondence_points(self.parent(), correspondence_output, frame_number=0)
+                    self.step_completed.emit(step_name, True)
+                    return
                 
                 self.progress_updated.emit(0, "Step 5: Initializing correspondence points generation...")
                 self.output_received.emit("Step 5: Generating correspondence points from yard markers...")
@@ -562,21 +455,12 @@ class ProcessingWorker(QThread):
                 step_name = "Homography Transformation"
                 self.output_received.emit(f"Step 6: Checking {step_name}...")
                 
-                # Check if step is already completed
-                if self.check_step_completed(5):
-                    self.output_received.emit(f"✓ {step_name} already completed!")
-                    user_choice = self.ask_user_skip_step(step_name, 5)
-                    
-                    if user_choice == "cancel":
-                        self.processing_failed.emit("Processing cancelled by user")
-                        return
-                    elif user_choice == "skip":
-                        self.output_received.emit(f"Skipping {step_name} - using existing results")
-                        self.homography_output = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_homography.json"
-                        self.step_completed.emit(step_name, True)
-                        return
-                    else:  # rerun
-                        self.output_received.emit(f"Re-running {step_name}...")
+                # Skip silently if already done (unless a full re-run was requested)
+                if self.check_step_completed(5) and not self.force_rerun:
+                    self.output_received.emit(f"✓ {step_name} already completed - using existing results")
+                    self.homography_output = f"{self.output_dir}/{self.video_folder}/homography/{self.video_name}_homography.json"
+                    self.step_completed.emit(step_name, True)
+                    return
                 
                 self.progress_updated.emit(0, "Step 6: Initializing per-frame homography transformation...")
                 self.output_received.emit("Step 6: Running per-frame homography transformation...")
@@ -634,23 +518,13 @@ class ProcessingWorker(QThread):
                 
                 # Check if CSV row has been augmented from default values
                 is_augmented = self.is_csv_row_augmented()
-                
-                if is_augmented:
-                    # CSV has been modified, check if step is already completed and prompt
-                    if self.check_step_completed(6):
-                        self.output_received.emit(f"✓ {step_name} prerequisites met and CSV data has been augmented!")
-                        user_choice = self.ask_user_skip_step(step_name, 6)
-                        
-                        if user_choice == "cancel":
-                            self.processing_failed.emit("Processing cancelled by user")
-                            return
-                        elif user_choice == "skip":
-                            self.output_received.emit(f"Skipping {step_name}")
-                            self.step_completed.emit(step_name, True)
-                            return
-                        else:  # rerun
-                            self.output_received.emit(f"Re-running {step_name}...")
-                else:
+
+                # Skip silently if already done (unless a full re-run was requested)
+                if self.check_step_completed(6) and not self.force_rerun:
+                    self.output_received.emit(f"✓ {step_name} already completed - using existing results")
+                    self.step_completed.emit(step_name, True)
+                    return
+                if not is_augmented:
                     # CSV row is still at defaults, run automatically without prompting
                     self.output_received.emit(f"CSV row is at default values, running {step_name} automatically...")
                 
@@ -1133,6 +1007,9 @@ class ProcessingDialog(QDialog):
         """)
         self.next_button.clicked.connect(self.next_step)
         self.next_button.setEnabled(False)
+        # Hidden by default: the pipeline auto-advances through every step after
+        # a single "Process" click. Only shown as a Retry button on failure.
+        self.next_button.setVisible(False)
         button_layout.addWidget(self.next_button)
         
         
@@ -1198,12 +1075,50 @@ class ProcessingDialog(QDialog):
         # Debug signal connections
         self.add_output("DEBUG: Setting up signal connections...")
         self.add_output("DEBUG: Signal connections established")
-        
+
+        # If the video is already fully processed, ask ONCE whether to re-run
+        # everything. Otherwise the pipeline runs (filling in any missing steps)
+        # automatically with no per-step prompts.
+        try:
+            already_done = self.worker.all_steps_completed()
+        except Exception as e:
+            self.add_output(f"DEBUG: could not check existing results: {e}")
+            already_done = False
+
+        if already_done:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Video Already Processed")
+            msg.setIcon(QMessageBox.Question)
+            msg.setText("This video has already been processed fully.")
+            msg.setInformativeText(
+                "Do you want to re-run every processing step again?\n\n"
+                "• Yes — re-run all steps from scratch\n"
+                "• No — keep the existing results"
+            )
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            msg.setDefaultButton(QMessageBox.No)
+            choice = msg.exec()
+
+            if choice == QMessageBox.Yes:
+                self.add_output("Re-running all processing steps from scratch...")
+                self.worker.force_rerun = True
+            else:
+                # Keep existing results: don't process, just refresh the views.
+                self.add_output("Using existing results - no re-processing needed.")
+                self.reload_data_sheet_and_virtual_field()
+                self.status_label.setText("Already processed - using existing results")
+                self.progress_bar.setValue(100)
+                self.cancel_button.setVisible(False)
+                self.next_button.setVisible(False)
+                self.close_button.setVisible(True)
+                self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+                return
+
         self.worker.start()
-        
+
         # Start progress timer for smoother updates
         self.progress_timer.start(500)  # Update every 500ms
-    
+
     def update_progress(self, percentage, status):
         """Update progress bar and status"""
         self.progress_bar.setValue(percentage)
@@ -1231,27 +1146,37 @@ class ProcessingDialog(QDialog):
         
         if success:
             self.add_output(f"{step_name} completed successfully!")
-            
+
             # If snap detection completed, reload snap markers in the video player
             if step_name == "Snap Detection":
                 parent_window = self.parent()
                 if parent_window and hasattr(parent_window, 'current_video_path') and parent_window.current_video_path:
                     # Add a small delay to ensure file is written
                     QTimer.singleShot(500, lambda: self.reload_snap_markers(parent_window))
-            
+
             # Check if this was the final step
             if self.current_step >= len(self.step_names) - 1:
                 # Final step completed - automatically finish processing
                 self.add_output("All processing steps completed!")
                 self.processing_completed({"homography_output": "Processing completed successfully"})
             else:
-                # Not the final step - show next button
-                self.next_button.setEnabled(True)
-                self.next_button.setText(f"Next: {self.get_next_step_name()}")
+                # Automatically continue to the next step so the user only
+                # has to click "Process" once for the entire pipeline.
+                self.add_output(f"Continuing to next step: {self.get_next_step_name()}...")
+                # Small delay so the UI can repaint before the next step starts.
+                QTimer.singleShot(100, self.next_step)
         else:
-            self.add_output(f"{step_name} failed!")
-            self.next_button.setEnabled(False)
-            self.next_button.setText("Next Step")
+            # Stop the pipeline on failure and let the user retry the failed
+            # step or cancel. The Next button is repurposed as a Retry button.
+            self.add_output(f"{step_name} failed! Processing stopped.")
+            try:
+                self.next_button.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self.next_button.clicked.connect(self.retry_step)
+            self.next_button.setVisible(True)
+            self.next_button.setEnabled(True)
+            self.next_button.setText(f"Retry: {step_name}")
     
     def reload_snap_markers(self, parent_window):
         """Reload snap detection markers after snap detection completes"""
@@ -1274,12 +1199,35 @@ class ProcessingDialog(QDialog):
         if self.worker:
             self.current_step += 1
             self.next_button.setEnabled(False)
+            self.next_button.setVisible(False)
             self.next_button.setText("Next Step")
             self.progress_bar.setValue(0)  # Reset progress bar
             self.worker.next_step()
-            
+
             # Restart progress timer for the new step
             self.progress_timer.start(500)
+
+    def retry_step(self):
+        """Re-run the current step after a failure (does not advance)."""
+        if not self.worker:
+            return
+        # Restore the auto-advance behaviour for subsequent steps.
+        try:
+            self.next_button.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self.next_button.clicked.connect(self.next_step)
+        self.next_button.setEnabled(False)
+        self.next_button.setVisible(False)
+        self.next_button.setText("Next Step")
+        self.progress_bar.setValue(0)  # Reset progress bar
+        self.add_output(f"Retrying: {self.step_names[self.current_step]}...")
+        # Reset worker frame tracking and re-run the same step.
+        self.worker.current_frame = 0
+        self.worker.frames_processed = 0
+        self.worker.bootup_start_time = None
+        self.worker.start()
+        self.progress_timer.start(500)
     
     def processing_completed(self, results):
         """Handle successful processing completion"""
