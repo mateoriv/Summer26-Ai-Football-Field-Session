@@ -920,13 +920,6 @@ def create_video_title_bar(dock):
     layout.addWidget(legend_checkbox)
 
 
-    # Close button (X)
-    close_btn = QPushButton("✕")
-    close_btn.setFixedSize(20, 20)
-    close_btn.setToolTip("Close")
-    close_btn.clicked.connect(dock.close)
-    layout.addWidget(close_btn)
-    
     title_bar.setLayout(layout)
     return title_bar
 
@@ -934,7 +927,7 @@ def create_video_dock(parent):
     """Create the video dock widget with custom video widget"""
     dock = QDockWidget("Video", parent)
     dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
+    dock.setFeatures(QDockWidget.DockWidgetMovable)
     
     dock.setTitleBarWidget(create_video_title_bar(dock))
     

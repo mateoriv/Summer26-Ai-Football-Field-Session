@@ -513,25 +513,6 @@ def create_dock_title_bar(dock, parent):
     scoreboard_btn.clicked.connect(lambda: toggle_scoreboard(parent, scoreboard_btn))
     layout.addWidget(scoreboard_btn)
     
-    # Close button
-    close_btn = QPushButton("✕")
-    close_btn.setToolTip("Close Dock")
-    close_btn.setStyleSheet("""
-        QPushButton {
-            background-color: #f44336;
-            color: white;
-            border: none;
-            border-radius: 3px;
-            padding: 4px 8px;
-            font-size: 12px;
-        }
-        QPushButton:hover {
-            background-color: #d32f2f;
-        }
-    """)
-    close_btn.clicked.connect(dock.close)
-    layout.addWidget(close_btn)
-    
     title_bar.setLayout(layout)
     return title_bar
 
@@ -539,7 +520,7 @@ def create_virtual_field_dock(parent):
     """Create a simplified virtual field dock with static field image and player dots"""
     dock = QDockWidget("Virtual Field", parent)
     dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
+    dock.setFeatures(QDockWidget.DockWidgetMovable)
     
     # Set custom title bar with scoreboard toggle
     dock.setTitleBarWidget(create_dock_title_bar(dock, parent))

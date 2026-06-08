@@ -82,36 +82,19 @@ def create_file_title_bar(dock):
     layout.setContentsMargins(8, 4, 8, 4)
     layout.setSpacing(8)
     
-    # Left spacer to center the title
-    left_spacer = QWidget()
-    left_spacer.setFixedWidth(20)  # Space for close button on the right
-    layout.addWidget(left_spacer)
-    
     # Title label (centered)
     title_label = QLabel("File Access")
     title_label.setFont(QFont("Arial", 10, QFont.Bold))
     title_label.setAlignment(Qt.AlignCenter)
     layout.addWidget(title_label)
-    
-    # Right spacer to balance the left spacer
-    right_spacer = QWidget()
-    right_spacer.setFixedWidth(20)  # Space for close button on the right
-    layout.addWidget(right_spacer)
-    
-    # Close button (X)
-    close_btn = QPushButton("✕")
-    close_btn.setFixedSize(20, 20)
-    close_btn.setToolTip("Close")
-    close_btn.clicked.connect(dock.close)
-    layout.addWidget(close_btn)
-    
+
     title_bar.setLayout(layout)
     return title_bar
 
 def create_file_dock(parent):
     dock = QDockWidget("File Access", parent)
     dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
+    dock.setFeatures(QDockWidget.DockWidgetMovable)
     
     # Set custom title bar
     dock.setTitleBarWidget(create_file_title_bar(dock))

@@ -112,8 +112,8 @@ class CSVTableModel(QAbstractTableModel):
 def create_data_sheet_dock(parent):
     dock = QDockWidget("Data Sheet", parent)
     dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
-    
+    dock.setFeatures(QDockWidget.DockWidgetMovable)
+
     # Set custom title bar with process button
     dock.setTitleBarWidget(create_data_sheet_title_bar(dock, parent))
 
@@ -391,13 +391,6 @@ def create_data_sheet_title_bar(dock, parent):
     batch_process_btn.setToolTip("Batch Process All Videos in Folder")
     batch_process_btn.clicked.connect(lambda: batch_process_videos(parent))
     layout.addWidget(batch_process_btn)
-    
-    # Close button (X)
-    close_btn = QPushButton("✕")
-    close_btn.setFixedSize(20, 20)
-    close_btn.setToolTip("Close")
-    close_btn.clicked.connect(dock.close)
-    layout.addWidget(close_btn)
     
     title_bar.setLayout(layout)
     return title_bar
