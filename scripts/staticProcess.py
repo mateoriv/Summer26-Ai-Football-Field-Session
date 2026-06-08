@@ -129,6 +129,45 @@ def take_first_11_on_side(detections, side):
     return points
 
 
+def identify_qb(points_11):
+    """
+    Identify the QB index among 11 offensive players assuming shotgun formation.
+
+    The QB is the backfield player (behind the LOS) whose lateral position (y)
+    is closest to the center of the offensive line.
+
+    Args:
+        points_11: list of [nx, ny, ox, oy] for the 11 offensive players,
+                   normalized so offense always attacks from the left (increasing x).
+
+    Returns:
+        Index into points_11 of the QB, or None if no backfield player is found.
+    """
+    if not points_11:
+        return None
+
+    xs = [p[0] for p in points_11]
+    los_x = min(xs)
+
+    # Players within 2 yards of the LOS are considered linemen
+    los_threshold = los_x + 2.0
+    linemen = [p for p in points_11 if p[0] <= los_threshold]
+    backfield = [(i, p) for i, p in enumerate(points_11) if p[0] > los_threshold]
+
+    if not backfield:
+        return None
+
+    # Lateral center of the offensive line
+    if linemen:
+        line_center_y = float(np.median([p[1] for p in linemen]))
+    else:
+        line_center_y = float(np.median([p[1] for p in points_11]))
+
+    # QB is the backfield player laterally closest to the line center
+    qb_idx, _ = min(backfield, key=lambda ip: abs(ip[1][1] - line_center_y))
+    return qb_idx
+
+
 def get_offense_points_for_video(video_name, folder_name, base_cache_dir):
     """
     Same pipeline as build_offense_positions_dataset.py, but for one clip.
