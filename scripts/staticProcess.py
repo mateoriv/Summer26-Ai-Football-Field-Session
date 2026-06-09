@@ -635,16 +635,16 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
                 if median_y > top_hash:
                     hash_side = "L"
                 elif median_y < bottom_hash:
-                    hash_side = "M"
-                else:
                     hash_side = "R"
+                else:
+                    hash_side = "M"
             else:
                 if median_y > top_hash:
                     hash_side = "R"
                 elif median_y < bottom_hash:
-                    hash_side = "M"
-                else:
                     hash_side = "L"
+                else:
+                    hash_side = "M"
          
             df.at[video_row_index, 'HASH'] = hash_side
         else:

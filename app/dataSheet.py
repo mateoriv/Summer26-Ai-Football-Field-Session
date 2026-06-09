@@ -27,7 +27,7 @@ class CSVTableModel(QAbstractTableModel):
         base = Qt.ItemIsEnabled | Qt.ItemIsSelectable
         if not self._data.empty:
             col = self._data.columns[index.column()].upper()
-            if col not in ('CLIP NAME', 'HASH'):
+            if col not in ('CLIP NAME',):
                 return base | Qt.ItemIsEditable
         return base
 

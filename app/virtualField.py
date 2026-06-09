@@ -39,6 +39,8 @@ class VirtualFieldWidget(QWidget):
         self.current_frame = 0
         self.homography_data = None
         self.field_image = None
+        self.offense_selection_mode = False
+        self.offense_label_points = []  # list of (center_x, center_y, class_name) in image space
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background-color: #2b2b2b; border: 1px solid #555555;")
         
@@ -177,9 +179,32 @@ class VirtualFieldWidget(QWidget):
                     field_bottom = field_y_offset + field_height
                     
                     if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
-                        # Get color from the map, using 'player' as default fallback
-                        dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
-                        # dot_color = POSITION_COLORS['player']
+                        # Get color: in offense-selection mode use team-based colors,
+                        # otherwise use the position-specific POSITION_COLORS map
+                        if getattr(self, 'offense_selection_mode', False):
+                            resolved_label = object_label
+                            label_pts = getattr(self, 'offense_label_points', [])
+                            if label_pts:
+                                orig_bbox = player.get('original_bbox', {})
+                                ocx = orig_bbox.get('center_x')
+                                ocy = orig_bbox.get('center_y')
+                                if ocx is not None and ocy is not None:
+                                    best_cls, _ = min(
+                                        ((cls, (ocx - px) ** 2 + (ocy - py) ** 2)
+                                         for px, py, cls in label_pts),
+                                        key=lambda t: t[1]
+                                    )
+                                    resolved_label = best_cls
+                            if resolved_label == 'defense':
+                                dot_color = POSITION_COLORS['defense']
+                            elif resolved_label == 'qb':
+                                dot_color = POSITION_COLORS['qb']
+                            elif resolved_label == 'wide_receiver':
+                                dot_color = POSITION_COLORS['wide_receiver']
+                            else:
+                                dot_color = POSITION_COLORS['oline']
+                        else:
+                            dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
                         
                         # Draw player dot - make it more visible
                         painter.setBrush(QBrush(dot_color))  

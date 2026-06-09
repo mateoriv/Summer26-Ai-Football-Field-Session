@@ -124,6 +124,7 @@ class CustomVideoWidget(QWidget):
         self.show_offense_selection = False
         self.offense_selection_frame = None
         self.offense_selection_points = []
+        self.offense_selection_classes = []
         self.overlay_items = []
         self.cap = None
         self.total_frames = 0
@@ -157,10 +158,11 @@ class CustomVideoWidget(QWidget):
         self.show_yard_marker_boxes = show
         self.update()
 
-    def set_offense_selection(self, frame_number, points):
+    def set_offense_selection(self, frame_number, points, classes=None):
         """Store which frame and points correspond to the selected 11 offensive players."""
         self.offense_selection_frame = frame_number
         self.offense_selection_points = points or []
+        self.offense_selection_classes = classes or []
         self.update()
 
     def set_show_offense_selection(self, show):
@@ -234,28 +236,6 @@ class CustomVideoWidget(QWidget):
                 y_offset = (self.height() - scaled_pixmap.height()) // 2
                 painter.drawPixmap(x_offset, y_offset, scaled_pixmap)
 
-                # If offense selection is enabled, draw small markers at the selected points
-                if getattr(self, "show_offense_selection", False) and self.offense_selection_points:
-                    # Determine base video resolution (prefer detection metadata, fall back to frame size)
-                    base_video_width = width
-                    base_video_height = height
-                    if self.position_detection_data and "video_info" in self.position_detection_data:
-                        vinfo = self.position_detection_data["video_info"]
-                        base_video_width = vinfo.get("width", base_video_width)
-                        base_video_height = vinfo.get("height", base_video_height)
-
-                    if base_video_width and base_video_height:
-                        scale_off_x = scaled_pixmap.width() / base_video_width
-                        scale_off_y = scaled_pixmap.height() / base_video_height
-
-                        marker_radius = 8
-                        painter.setPen(QPen(QColor(255, 255, 0), 2))
-                        painter.setBrush(Qt.NoBrush)
-                        for px, py in self.offense_selection_points:
-                            sx = int(px * scale_off_x) + x_offset - marker_radius
-                            sy = int(py * scale_off_y) + y_offset - marker_radius
-                            painter.drawRect(sx, sy, marker_radius * 2, marker_radius * 2)
-
                 # Define data sources to draw
                 video_data_sources = []
                 if self.show_boxes and self.position_detection_data:
@@ -314,10 +294,12 @@ class CustomVideoWidget(QWidget):
                 min_diff = diff
                 closest_frame = frame_data
         
-        # Use a tolerance of 15 frames
-        if closest_frame and min_diff < 15:
+        # In offense selection mode the positions file only has the snap frame,
+        # so show that frame's detections everywhere in the video.
+        tolerance = 100000 if getattr(self, 'show_offense_selection', False) else 15
+        if closest_frame and min_diff < tolerance:
             return closest_frame.get('detections', [])
-        
+
         return []
     
     def _draw_single_bbox(self, painter, detection, scale_x, scale_y, x_offset=0, y_offset=0):
@@ -349,20 +331,16 @@ class CustomVideoWidget(QWidget):
         # Default box color
         box_color = POSITION_COLORS.get(class_name.lower(), POSITION_COLORS['player'])
 
-        # Optionally highlight boxes that are part of the selected 11 offensive players
-        if getattr(self, "show_offense_selection", False) and self.offense_selection_points:
-            # Highlight boxes whose centers are close to the selected offense points,
-            # on all frames (even though the selection was computed at the snap).
-            cx = bbox.get('center_x', (x1 + x2) / 2.0)
-            cy = bbox.get('center_y', (y1 + y2) / 2.0)
-            tol = 10.0  # pixels
-            tol_sq = tol * tol
-            for px, py in self.offense_selection_points:
-                dx = px - cx
-                dy = py - cy
-                if dx * dx + dy * dy <= tol_sq:
-                    box_color = QColor(255, 255, 0)  # bright yellow highlight
-                    break
+        # When offense selection mode is on, color boxes by team role
+        if getattr(self, "show_offense_selection", False) and class_name != 'yard_marker':
+            if class_name == 'defense':
+                box_color = POSITION_COLORS['defense']             # gray
+            elif class_name == 'qb':
+                box_color = POSITION_COLORS['qb']                  # yellow
+            elif class_name == 'wide_receiver':
+                box_color = POSITION_COLORS['wide_receiver']       # cyan
+            else:
+                box_color = POSITION_COLORS['oline']               # blue for other offense
        
         # Draw bounding box
         painter.setPen(QPen(box_color, 3))
@@ -1243,8 +1221,8 @@ def _compute_offense_selection_for_current_video(parent):
             return False
 
         if hasattr(parent, "custom_video"):
-            # Frame index is not critical anymore; markers are drawn on all frames.
-            parent.custom_video.set_offense_selection(0, points)
+            classes = _get_offense_point_classes(video_name, folder_name, base_cache_dir, points)
+            parent.custom_video.set_offense_selection(0, points, classes)
             print(f"[OFFENSE SELECTION] Loaded offense selection for {video_name} from offense_positions.csv")
             return True
 
@@ -1252,6 +1230,63 @@ def _compute_offense_selection_for_current_video(parent):
     except Exception as e:
         print(f"[OFFENSE SELECTION] Error loading offense selection from CSV: {e}")
         return False
+
+
+def _get_offense_point_classes(video_name, folder_name, base_cache_dir, offense_points):
+    """Return a list of class names (e.g. 'qb', 'defense', 'player') for each offense point.
+
+    Matches each (ox, oy) pixel coordinate to the nearest detection at the snap frame
+    using the positions JSON produced by the position detection pipeline.
+    """
+    try:
+        snap_file = os.path.join(base_cache_dir, folder_name, "snap_detection",
+                                 f"{video_name}_snap_detection.json")
+        if not os.path.exists(snap_file):
+            return []
+        with open(snap_file, 'r') as f:
+            snap_data = json.load(f)
+        snaps = snap_data.get('snaps', [])
+        if not snaps:
+            return []
+        snap_frame = snaps[0].get('frame')
+
+        positions_file = os.path.join(base_cache_dir, folder_name, "positions",
+                                      f"{video_name}_position.json")
+        if not os.path.exists(positions_file):
+            return []
+        with open(positions_file, 'r') as f:
+            positions_data = json.load(f)
+
+        snap_detections = []
+        for fr in positions_data.get('frames', []):
+            if fr.get('frame_number') == snap_frame:
+                snap_detections = fr.get('detections', [])
+                break
+
+        if not snap_detections:
+            return []
+
+        classes = []
+        for (ox, oy) in offense_points:
+            best_class = 'player'
+            best_dist = float('inf')
+            for det in snap_detections:
+                bbox = det.get('bbox', {})
+                cx = bbox.get('center_x')
+                cy = bbox.get('center_y')
+                if cx is None or cy is None:
+                    continue
+                dist = (ox - cx) ** 2 + (oy - cy) ** 2
+                if dist < best_dist:
+                    best_dist = dist
+                    best_class = det.get('class', 'player').lower()
+            classes.append(best_class)
+
+        return classes
+    except Exception as e:
+        print(f"[OFFENSE SELECTION] Error getting point classes: {e}")
+        return []
+
 
 def toggle_bounding_boxes(parent, button):
     """Toggle bounding box visibility on the custom video widget"""
@@ -1305,6 +1340,144 @@ def toggle_bounding_boxes(parent, button):
         print("No custom video widget found!")
 
 
+def _ensure_qb_labeled(positions_data):
+    """Geometric fallbacks for QB and WR labeling when the model misclassifies.
+
+    Pass 1 — WR fallback:
+      Offense players whose image-y is more than 1.5 standard deviations from the
+      formation's mean-y are split wide and should be wide receivers.  Only generic
+      labels ('oline', 'running_back', 'player') are overridden — model-detected
+      'wide_receiver' and 'tight_end' labels are kept as-is.
+
+    Pass 2 — QB fallback (only when no QB was detected):
+      Among the remaining interior (non-WR / non-TE) players, the one deepest in
+      the backfield (most extreme image-x away from the defense) is labeled QB.
+    """
+    for frame_data in positions_data.get('frames', []):
+        detections = frame_data.get('detections', [])
+
+        off_dets = [d for d in detections
+                    if d.get('class', '').lower() not in ('defense', 'ref', 'yard_marker')
+                    and 'bbox' in d
+                    and d['bbox'].get('center_x') is not None
+                    and d['bbox'].get('center_y') is not None]
+        def_xs = [d['bbox']['center_x'] for d in detections
+                  if d.get('class', '').lower() == 'defense'
+                  and d.get('bbox', {}).get('center_x') is not None]
+
+        if len(off_dets) < 3:
+            continue
+
+        off_xs = [d['bbox']['center_x'] for d in off_dets]
+        off_ys = [d['bbox']['center_y'] for d in off_dets]
+
+        # Determine which side of the image the offense occupies
+        if def_xs:
+            def_med_x = sorted(def_xs)[len(def_xs) // 2]
+            left_count = sum(1 for x in off_xs if x < def_med_x)
+            offense_side = "left" if left_count >= len(off_xs) / 2 else "right"
+        else:
+            offense_side = "left"
+
+        # --- Pass 1: WR fallback ---
+        mean_y = sum(off_ys) / len(off_ys)
+        var_y  = sum((y - mean_y) ** 2 for y in off_ys) / len(off_ys)
+        std_y  = var_y ** 0.5
+
+        if std_y > 0:
+            for d in off_dets:
+                cls = d.get('class', '').lower()
+                if cls in ('qb', 'wide_receiver', 'tight_end'):
+                    continue  # keep model-confident labels
+                cy = d['bbox']['center_y']
+                if abs(cy - mean_y) > 1.5 * std_y:
+                    d['class'] = 'wide_receiver'
+                    print(f"[OFFENSE SELECTION] WR fallback: relabeled '{cls}' at "
+                          f"({d['bbox']['center_x']:.0f}, {cy:.0f})")
+
+        # --- Pass 2: QB fallback ---
+        if any(d.get('class', '').lower() == 'qb' for d in detections):
+            continue
+
+        # Interior = offense players that aren't WR or TE (i.e., at the line / backfield)
+        interior = [d for d in off_dets
+                    if d.get('class', '').lower() not in ('wide_receiver', 'tight_end')]
+        if not interior:
+            interior = off_dets
+
+        qb_det = (min(interior, key=lambda d: d['bbox']['center_x']) if offense_side == "left"
+                  else max(interior, key=lambda d: d['bbox']['center_x']))
+        qb_det['class'] = 'qb'
+        print(f"[OFFENSE SELECTION] QB fallback: assigned qb to player at "
+              f"({qb_det['bbox']['center_x']:.0f}, {qb_det['bbox']['center_y']:.0f})")
+
+
+def _load_position_data_for_offense_mode(parent):
+    """Swap the video widget's detection data to the position-labeled JSON.
+
+    positionDetection.pt outputs qb/defense/oline/etc. classes; this replaces
+    the generic player-detection data so bounding boxes show team colors.
+    Runs _ensure_qb_labeled so the backfield player is always highlighted yellow
+    even when the model misses the QB classification.
+    Also enables box visibility so the user sees the result immediately.
+    """
+    if not hasattr(parent, 'current_video_path') or not parent.current_video_path:
+        return
+    video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
+    folder_name = os.path.basename(getattr(parent, 'current_folder', '').rstrip('/\\'))
+    base_cache_dir = get_cache_dir()
+    positions_file = os.path.join(base_cache_dir, folder_name, "positions",
+                                  f"{video_name}_position.json")
+    if not os.path.exists(positions_file):
+        print(f"[OFFENSE SELECTION] Positions file not found: {positions_file}")
+        return
+    try:
+        with open(positions_file, 'r') as f:
+            data = json.load(f)
+        _ensure_qb_labeled(data)
+        if hasattr(parent, 'custom_video'):
+            parent.custom_video.set_detection_data(data)
+            parent.custom_video.set_show_boxes(True)
+        print(f"[OFFENSE SELECTION] Loaded position-labeled data for offense mode")
+    except Exception as e:
+        print(f"[OFFENSE SELECTION] Error loading position data: {e}")
+
+
+def _restore_player_data_after_offense_mode(parent):
+    """Restore the generic player-detection data after offense mode is turned off."""
+    load_and_set_detection_data(parent, "players")
+    if hasattr(parent, 'custom_video'):
+        parent.custom_video.set_show_boxes(getattr(parent, 'show_bounding_boxes', False))
+
+
+def _update_virtual_field_labels(parent):
+    """Populate virtual_field.offense_label_points from the corrected position data.
+
+    Builds a list of (center_x, center_y, class_name) tuples in image space so
+    the virtual field can nearest-neighbour match each dot's original_bbox to the
+    correct position class.
+    """
+    if not hasattr(parent, 'virtual_field'):
+        return
+    vf = parent.virtual_field
+    pos_data = getattr(parent.custom_video, 'position_detection_data', None) if hasattr(parent, 'custom_video') else None
+    if pos_data is None:
+        vf.offense_label_points = []
+        return
+
+    label_pts = []
+    for frame_data in pos_data.get('frames', []):
+        for det in frame_data.get('detections', []):
+            bbox = det.get('bbox', {})
+            cx = bbox.get('center_x')
+            cy = bbox.get('center_y')
+            cls = det.get('class', 'player').lower()
+            if cx is not None and cy is not None:
+                label_pts.append((cx, cy, cls))
+
+    vf.offense_label_points = label_pts
+
+
 def toggle_offense_selection(parent, button):
     """Toggle highlight of the 11 offensive players at the snap frame."""
     if not hasattr(parent, "custom_video"):
@@ -1318,8 +1491,21 @@ def toggle_offense_selection(parent, button):
             button.setChecked(False)
             return
         parent.custom_video.set_show_offense_selection(True)
+        # Use position-labeled data so QB/defense/oline class names are present
+        _load_position_data_for_offense_mode(parent)
+        # Populate virtual field label points from the now-corrected position data
+        _update_virtual_field_labels(parent)
     else:
         parent.custom_video.set_show_offense_selection(False)
+        # Restore generic player detection data
+        _restore_player_data_after_offense_mode(parent)
+        if hasattr(parent, 'virtual_field'):
+            parent.virtual_field.offense_label_points = []
+
+    # Sync virtual field team coloring
+    if hasattr(parent, 'virtual_field'):
+        parent.virtual_field.offense_selection_mode = button.isChecked()
+        parent.virtual_field.update()
 
 def toggle_yard_marker_boxes(parent, button):
     """Toggle yard marker bounding box visibility - wrapper for unified function"""
