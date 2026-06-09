@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QFont
 import pandas as pd
 import os
+import re
 
 class CSVTableModel(QAbstractTableModel):
     def __init__(self, data=None, parent=None):
@@ -68,15 +69,26 @@ class CSVTableModel(QAbstractTableModel):
         try:
             self.beginResetModel()
             self._data = pd.read_csv(csv_path)
-            
+
             # Try to auto-detect video clip and time columns
+            clip_col = None
             for col in self._data.columns:
                 col_lower = col.lower()
                 if 'clip' in col_lower or 'video' in col_lower:
                     self.video_clip_column = col
+                    clip_col = col
                 if 'time' in col_lower or 'timestamp' in col_lower:
                     self.video_time_column = col
-            
+
+            # Sort rows by the clip name column using natural/numeric order
+            if clip_col and not self._data.empty:
+                def _nat_key(val):
+                    return [int(c) if c.isdigit() else c.lower()
+                            for c in re.split(r'(\d+)', str(val))]
+                self._data = self._data.iloc[
+                    self._data[clip_col].map(_nat_key).argsort()
+                ].reset_index(drop=True)
+
             self.endResetModel()
             self.has_unsaved_changes = False
             return True

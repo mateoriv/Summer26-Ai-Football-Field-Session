@@ -423,25 +423,41 @@ def _determine_backfield_type(video_name, folder_name, base_cache_dir):
     # Strip refs; work with offense and defense only
     dets = [d for d in position_detections if _normalize_class(d.get("class")) != "ref"]
 
-    # Find QB — use labeled 'qb' first, then geometric fallback
+    # Find QB — use labeled 'qb' first, then centered-backfield fallback.
+    # If multiple QBs are labeled, keep only the one closest to the snap center (oline mean Y).
     qb_dets = [d for d in dets if _normalize_class(d.get("class")) == "qb"]
+
+    if len(qb_dets) > 1:
+        oline_fb = [d for d in dets if _normalize_class(d.get("class")) == "oline"
+                    and d.get("bbox", {}).get("center_y") is not None]
+        cy = (sum(d["bbox"]["center_y"] for d in oline_fb) / len(oline_fb)
+              if oline_fb else
+              sum(d["bbox"]["center_y"] for d in qb_dets) / len(qb_dets))
+        qb_dets = [min(qb_dets, key=lambda d: abs(d["bbox"]["center_y"] - cy))]
+
     if not qb_dets:
         off_dets = [d for d in dets if _normalize_class(d.get("class")) != "defense"
                     and d.get("bbox", {}).get("center_x") is not None]
         if not off_dets:
             return None
-        off_ys = [d["bbox"]["center_y"] for d in off_dets]
-        mean_y = sum(off_ys) / len(off_ys)
-        std_y = (sum((y - mean_y) ** 2 for y in off_ys) / len(off_ys)) ** 0.5
-        interior = [
-            d for d in off_dets
-            if _normalize_class(d.get("class")) not in ("wide_receiver", "tight_end")
-            and (std_y == 0 or abs(d["bbox"]["center_y"] - mean_y) <= 1.5 * std_y)
-        ] or off_dets
-        if offense_side == "left":
-            qb_dets = [min(interior, key=lambda d: d["bbox"]["center_x"])]
+        oline_fb = [d for d in off_dets if _normalize_class(d.get("class")) == "oline"]
+        if oline_fb:
+            center_y = sum(d["bbox"]["center_y"] for d in oline_fb) / len(oline_fb)
         else:
-            qb_dets = [max(interior, key=lambda d: d["bbox"]["center_x"])]
+            off_ys = [d["bbox"]["center_y"] for d in off_dets]
+            center_y = sum(off_ys) / len(off_ys)
+        backfield = [d for d in off_dets
+                     if _normalize_class(d.get("class")) not in ("wide_receiver", "tight_end", "oline")]
+        if not backfield:
+            off_ys = [d["bbox"]["center_y"] for d in off_dets]
+            mean_y = sum(off_ys) / len(off_ys)
+            std_y = (sum((y - mean_y) ** 2 for y in off_ys) / len(off_ys)) ** 0.5
+            backfield = [
+                d for d in off_dets
+                if _normalize_class(d.get("class")) not in ("wide_receiver", "tight_end")
+                and (std_y == 0 or abs(d["bbox"]["center_y"] - mean_y) <= 1.5 * std_y)
+            ] or off_dets
+        qb_dets = [min(backfield, key=lambda d: abs(d["bbox"]["center_y"] - center_y))]
 
     qb_bbox = qb_dets[0].get("bbox", {})
     qb_nx = _nearest_nx(float(qb_bbox.get("center_x", 0)), float(qb_bbox.get("center_y", 0)))
@@ -469,7 +485,7 @@ def _determine_backfield_type(video_name, folder_name, base_cache_dir):
         depth = qb_nx - oline_mean_nx   # oline closer to LOS = smaller nx for right offense
 
     print(f"[INFO] Backfield depth: {depth:.2f} yards (offense_side={offense_side})")
-    return "GUN" if depth >= 2.0 else "UNDER CENTER"
+    return "GUN" if depth >= 1.0 else "UNDER CENTER"
 
 
 def load_data(file_path):

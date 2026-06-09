@@ -1395,21 +1395,36 @@ def _ensure_qb_labeled(positions_data):
                     print(f"[OFFENSE SELECTION] WR fallback: relabeled '{cls}' at "
                           f"({d['bbox']['center_x']:.0f}, {cy:.0f})")
 
-        # --- Pass 2: QB fallback ---
-        if any(d.get('class', '').lower() == 'qb' for d in detections):
+        # --- Pass 2: QB and RB assignment ---
+        # Enforce exactly one QB per frame: the backfield player closest in Y to
+        # the snap center (mean Y of the oline).  All other backfield players
+        # (not WR/TE/oline) become running_back (orange).
+
+        oline_in_frame = [d for d in off_dets if d.get('class', '').lower() == 'oline']
+        if oline_in_frame:
+            oline_ys = [d['bbox']['center_y'] for d in oline_in_frame]
+            center_y = sum(oline_ys) / len(oline_ys)
+        else:
+            center_y = mean_y
+
+        backfield = [d for d in off_dets
+                     if d.get('class', '').lower() not in ('wide_receiver', 'tight_end', 'oline')]
+        if not backfield:
             continue
 
-        # Interior = offense players that aren't WR or TE (i.e., at the line / backfield)
-        interior = [d for d in off_dets
-                    if d.get('class', '').lower() not in ('wide_receiver', 'tight_end')]
-        if not interior:
-            interior = off_dets
-
-        qb_det = (min(interior, key=lambda d: d['bbox']['center_x']) if offense_side == "left"
-                  else max(interior, key=lambda d: d['bbox']['center_x']))
+        qb_det = min(backfield, key=lambda d: abs(d['bbox']['center_y'] - center_y))
         qb_det['class'] = 'qb'
-        print(f"[OFFENSE SELECTION] QB fallback: assigned qb to player at "
+        print(f"[OFFENSE SELECTION] QB assigned at "
               f"({qb_det['bbox']['center_x']:.0f}, {qb_det['bbox']['center_y']:.0f})")
+
+        for d in backfield:
+            if d is not qb_det:
+                d['class'] = 'running_back'
+
+        # Relabel any extra model-detected QBs
+        for d in detections:
+            if d.get('class', '').lower() == 'qb' and d is not qb_det:
+                d['class'] = 'running_back'
 
 
 def _load_position_data_for_offense_mode(parent):
@@ -1435,6 +1450,60 @@ def _load_position_data_for_offense_mode(parent):
         with open(positions_file, 'r') as f:
             data = json.load(f)
         _ensure_qb_labeled(data)
+
+        # Patch each position detection's bbox with the tighter bbox from the
+        # player detector (bestPlayerDetectorM.pt).  The position model's boxes
+        # are loose because it was trained for positional classification, not
+        # tight localisation.  We keep the class labels from position detection
+        # (for colour coding) but swap the box geometry from the player detector.
+        player_file = os.path.join(base_cache_dir, folder_name, "players",
+                                   f"{video_name}_detection.json")
+        if os.path.exists(player_file):
+            try:
+                with open(player_file, 'r') as f:
+                    player_data = json.load(f)
+
+                # Index player detections by frame number for O(1) lookup
+                player_index = {}
+                for fr in player_data.get('frames', []):
+                    fnum = fr.get('frame_number', 0)
+                    player_index[fnum] = [
+                        (d['bbox']['center_x'], d['bbox']['center_y'], d['bbox'])
+                        for d in fr.get('detections', [])
+                        if 'bbox' in d and 'center_x' in d['bbox']
+                    ]
+
+                MATCH_THRESHOLD_SQ = 100 ** 2  # max 100-pixel center distance
+
+                for frame_data in data.get('frames', []):
+                    fnum = frame_data.get('frame_number', 0)
+                    if fnum in player_index:
+                        pl_dets = player_index[fnum]
+                    elif player_index:
+                        closest = min(player_index.keys(), key=lambda k: abs(k - fnum))
+                        pl_dets = player_index[closest] if abs(closest - fnum) <= 5 else []
+                    else:
+                        pl_dets = []
+
+                    for pos_det in frame_data.get('detections', []):
+                        pos_bbox = pos_det.get('bbox', {})
+                        pcx = pos_bbox.get('center_x')
+                        pcy = pos_bbox.get('center_y')
+                        if pcx is None or pcy is None:
+                            continue
+                        best_dist, best_bbox = float('inf'), None
+                        for (plcx, plcy, pl_bbox) in pl_dets:
+                            d = (pcx - plcx) ** 2 + (pcy - plcy) ** 2
+                            if d < best_dist:
+                                best_dist = d
+                                best_bbox = pl_bbox
+                        if best_bbox is not None and best_dist < MATCH_THRESHOLD_SQ:
+                            pos_det['bbox'] = best_bbox
+
+                print(f"[OFFENSE SELECTION] Patched position bboxes with tight player-detector boxes")
+            except Exception as patch_err:
+                print(f"[OFFENSE SELECTION] Warning: could not patch player bboxes: {patch_err}")
+
         if hasattr(parent, 'custom_video'):
             parent.custom_video.set_detection_data(data)
             parent.custom_video.set_show_boxes(True)

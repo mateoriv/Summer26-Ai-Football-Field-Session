@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QDir, QFileInfo
 import os
+import re
 import sys
 from pathlib import Path
 import pandas as pd
@@ -223,10 +224,14 @@ def auto_load_folder_content(parent, folder_path):
                 if f.lower().endswith('.csv') and os.path.isfile(os.path.join(cache_dir, f))
             ]
         
-        # Find all video files in the video folder
-        video_files = [f for f in os.listdir(folder_path) 
-                      if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.wmv')) 
-                      and os.path.isfile(os.path.join(folder_path, f))]
+        # Find all video files in the video folder, sorted numerically
+        video_files = sorted(
+            [f for f in os.listdir(folder_path)
+             if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.wmv'))
+             and os.path.isfile(os.path.join(folder_path, f))],
+            key=lambda f: [int(c) if c.isdigit() else c.lower()
+                           for c in re.split(r'(\d+)', f)]
+        )
         
         # Create CSV with video titles if none exists and videos are present
         if not csv_files and video_files:
