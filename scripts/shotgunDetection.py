@@ -31,17 +31,13 @@ from perFrameHomographyTransform import (
     transform_point,
     field_points_are_degenerate,
 )
+from ioutils import load_json
 
 OFFENSE_SKILL = frozenset({"qb", "running_back", "wide_receiver", "tight_end"})
 
 # Depth thresholds in yards (tunable on real clips).
 UNDER_CENTER_MAX = 1.5
 PISTOL_MAX = 4.0
-
-
-def _load(path):
-    with open(path, "r") as f:
-        return json.load(f)
 
 
 def _frame_dets(positions, frame_number):
@@ -178,7 +174,7 @@ def main():
     ap.add_argument("--window", type=int, default=15, help="homography aggregation window")
     args = ap.parse_args()
 
-    snaps = (_load(args.snap_detection).get("snaps") or [])
+    snaps = (load_json(args.snap_detection).get("snaps") or [])
     if not snaps:
         print(json.dumps({"alignment": "unknown", "reason": "no snap frame"}))
         return 1
@@ -186,8 +182,8 @@ def main():
 
     result = detect_alignment(
         snap_frame,
-        _load(args.positions),
-        _load(args.correspondence).get("frame_correspondences", {}),
+        load_json(args.positions),
+        load_json(args.correspondence).get("frame_correspondences", {}),
         search_radius=args.search_radius,
         window=args.window,
     )

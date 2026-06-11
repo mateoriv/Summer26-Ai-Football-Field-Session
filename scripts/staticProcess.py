@@ -18,6 +18,11 @@ import torch
 import torch.nn.functional as F
 from itertools import combinations
 
+# Shared JSON / class-name helpers (this script's directory is on sys.path
+# when run directly via the processing pipeline).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ioutils import normalize_class
+
 FIELD_WIDTH_YD = 160/3
 
 # Template-based offense formation recognizer (no training, no labels).
@@ -40,8 +45,8 @@ def _get_template_matcher():
 
 # --- Offense-11 extraction (same logic as build_offense_positions_dataset) ---
 
-def _normalize_class(name):
-    return (name or "").strip().lower().replace(" ", "_")
+# Kept as a module-local alias so existing call sites stay unchanged.
+_normalize_class = normalize_class
 
 
 def get_snap_frame(snap_detection_path):
@@ -653,6 +658,36 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
                       f"method={tm_result.get('method','legacy')})")
             else:
                 print(f"[INFO] Template formation skipped: {tm_result.get('reason')}")
+
+        # Count-based formation primitives (no name-matching, no training):
+        # how many offense players are ON the line of scrimmage (the "front"
+        # count) and which way the formation's strength leans. Detection-
+        # tolerant -- a missed player shifts a count by one rather than flipping
+        # a named guess. Written to its own columns; leaves everything else be.
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "formations"))
+            import line_count_classifier
+            lc_result = line_count_classifier.recognize_from_cache(video_name, folder_name, base_cache_dir)
+            if lc_result.get("on_line_count") is not None:
+                for col in ("FRONT COUNT", "FRONT STRENGTH", "FRONT RELIABLE",
+                            "ATTACK DIR", "OFFENSE COUNT", "DEFENSE COUNT"):
+                    if col not in df.columns:
+                        df[col] = ""
+                df.at[video_row_index, "FRONT COUNT"] = int(lc_result["on_line_count"])
+                df.at[video_row_index, "FRONT STRENGTH"] = lc_result["strength"]
+                df.at[video_row_index, "FRONT RELIABLE"] = bool(lc_result["reliable"])
+                df.at[video_row_index, "ATTACK DIR"] = int(lc_result["attack_dir_x"])
+                df.at[video_row_index, "OFFENSE COUNT"] = int(lc_result["n_offense"])
+                df.at[video_row_index, "DEFENSE COUNT"] = int(lc_result["n_defense"])
+                line_count_classifier.save_snapshot(lc_result, video_name, folder_name, base_cache_dir)
+                print(f"[INFO] Front count: {lc_result['on_line_count']} on the line, "
+                      f"strength={lc_result['strength']} "
+                      f"(L/R off-line={lc_result['off_line_left']}/{lc_result['off_line_right']}, "
+                      f"reliable={lc_result['reliable']})")
+            else:
+                print(f"[INFO] Front count skipped: {lc_result.get('reason')}")
+        except Exception as _e:
+            print(f"[INFO] Front-count classifier error: {_e}")
 
         # QB-anchored template matcher (A/B against the legacy template matcher
         # and the MLP). Geometrically pins QB->Q and (when found) TE->Y/U

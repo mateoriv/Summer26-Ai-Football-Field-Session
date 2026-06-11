@@ -35,3 +35,6 @@ tzdata==2025.2
 ultralytics==8.3.221
 ultralytics-thop==2.0.17
 urllib3==2.5.0
+
+# --- Test-only (run: python -m pytest) ---
+pytest==9.0.3

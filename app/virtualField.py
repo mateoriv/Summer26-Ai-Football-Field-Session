@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QSlider
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap, QPainter, QPen, QBrush, QColor
+from PySide6.QtGui import QPixmap, QPainter, QPen, QBrush, QColor, QFont
 import subprocess
 import platform
 import cv2
@@ -39,6 +39,15 @@ class VirtualFieldWidget(QWidget):
         self.current_frame = 0
         self.homography_data = None
         self.field_image = None
+        # Pre-snap formation snapshot (classed players in field yards + LOS),
+        # written by formations/line_count_classifier.save_snapshot. When set,
+        # the field renders which team is attacking vs defending, the line of
+        # scrimmage, and the attack direction -- the clear pre-snap picture.
+        self.formation_snapshot = None
+        # Predicted formation name (template matcher) for the info panel,
+        # pushed by video.set_formation_info_for_virtual_field.
+        self.formation_name = ""
+        self.formation_confidence = None
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background-color: #2b2b2b; border: 1px solid #555555;")
         
@@ -81,6 +90,18 @@ class VirtualFieldWidget(QWidget):
                 with open(homography_file, 'r') as f:
                     self.homography_data = json.load(f)
                 print(f"Loaded homography data: {self.homography_data.get('total_frames')} frames")
+                # Stable whole-clip team (jersey colour) is trusted only when
+                # assignTeamColors flagged the split reliable; otherwise we fall
+                # back to the snap-window role match rather than show wrong teams.
+                meta = self.homography_data.get("team_color_meta") or {}
+                self._team_reliable = bool(meta.get("reliable"))
+                if "team_color_meta" in self.homography_data:
+                    print(f"Team colours: reliable={self._team_reliable} "
+                          f"(sep={meta.get('separation')})")
+                # The live dots are all labeled generic 'player'; load the
+                # position detector's per-frame ROLES so each live dot can be
+                # colored by its real team (matched by pixel bbox).
+                self._load_role_index(video_name, folder_name)
                 
                 # Set to first frame if homography data exists
                 if self.homography_data and 'normalized_positions' in self.homography_data:
@@ -114,6 +135,248 @@ class VirtualFieldWidget(QWidget):
         """Set the current frame and update the display"""
         self.current_frame = frame_number
         self.update()
+
+    def _load_role_index(self, video_name, folder_name):
+        """Per-frame (center_x, center_y, role) from the position detector, so a
+        live homography dot (all labeled generic 'player') can inherit its real
+        team by matching pixel bbox centers. Live data only -- no snapshot."""
+        self._role_by_frame = {}
+        try:
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'formations'))
+            import line_count_classifier as lcc
+            pos_p = os.path.join(get_cache_dir(), os.path.basename(folder_name),
+                                 "positions", f"{video_name}_position.json")
+            if not os.path.exists(pos_p):
+                return
+            with open(pos_p) as f:
+                pdata = json.load(f)
+            for fr in pdata.get("frames", []):
+                n = fr.get("frame_number")
+                if n is None:
+                    continue
+                lst = []
+                for d in fr.get("detections", []):
+                    b = d.get("bbox") or {}
+                    if b.get("center_x") is None:
+                        continue
+                    lst.append((b["center_x"], b["center_y"], lcc.normalize_class(d.get("class"))))
+                self._role_by_frame[int(n)] = lst
+            print(f"Loaded role index for live team coloring: {len(self._role_by_frame)} frames")
+        except Exception as e:
+            print(f"Role index load failed (live dots stay one color): {e}")
+
+    def _role_for_dot(self, frame, original_bbox):
+        """Nearest position-detector role to this live dot's pixel center."""
+        roles = getattr(self, "_role_by_frame", {}).get(int(frame))
+        if not roles or not original_bbox:
+            return None
+        cx, cy = original_bbox.get("center_x"), original_bbox.get("center_y")
+        if cx is None or cy is None:
+            return None
+        best, best_d = None, 60.0 * 60.0  # match within ~60 px
+        for rx, ry, role in roles:
+            dd = (rx - cx) ** 2 + (ry - cy) ** 2
+            if dd < best_d:
+                best_d, best = dd, role
+        return best
+
+    def load_formation_snapshot(self, video_name, folder_name):
+        """Load the pre-snap formation snapshot for this clip (or clear it)."""
+        try:
+            base_cache_dir = get_cache_dir()
+            snap_file = os.path.join(base_cache_dir, os.path.basename(folder_name),
+                                     "formation", f"{video_name}_formation.json")
+            if os.path.exists(snap_file):
+                with open(snap_file, "r") as f:
+                    self.formation_snapshot = json.load(f)
+                print(f"Loaded formation snapshot: front={self.formation_snapshot.get('on_line_count')}, "
+                      f"strength={self.formation_snapshot.get('strength')}")
+                self.update()
+                return True
+            self.formation_snapshot = None
+            self.update()
+            return False
+        except Exception as e:
+            print(f"Error loading formation snapshot: {e}")
+            self.formation_snapshot = None
+            self.update()
+            return False
+
+    def _live_formation_snapshot(self, video_name, folder_basename):
+        """Run the line-count classifier on the cached snap and return a snapshot
+        dict (offense/defense players in field yards + LOS) for rendering, or
+        None if the clip can't be read. No video processing -- cache only."""
+        try:
+            base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+            for p in (os.path.join(base, "formations"), os.path.join(base, "scripts")):
+                if p not in sys.path:
+                    sys.path.append(p)
+            import line_count_classifier as lcc
+            res = lcc.recognize_from_cache(video_name, folder_basename, get_cache_dir())
+            if not res or res.get("on_line_count") is None:
+                return None
+            return res  # already carries players[], los, on_line_count, strength, reliable
+        except Exception as e:
+            print(f"Live formation snapshot failed: {e}")
+            return None
+
+    def _field_rect(self):
+        """Field draw rectangle inside the widget (x_off, y_off, w, h)."""
+        field_width = min(self.width(), int(self.height() * 100 / 53.33))
+        field_height = min(self.height(), int(self.width() * 53.33 / 100))
+        x_off = (self.width() - field_width) // 2
+        y_off = (self.height() - field_height) // 2
+        return x_off, y_off, field_width, field_height
+
+    def set_formation_info(self, name=None, confidence=None):
+        """Predicted formation name for the info panel (template matcher)."""
+        self.formation_name = name or ""
+        self.formation_confidence = confidence
+        self.update()
+
+    def _to_widget(self, fx, fy):
+        """Field yards (120 x 53.33, origin bottom-left) -> widget pixels."""
+        x_off, y_off, fw, fh = self._field_rect()
+        wx = int(x_off + (fx / 120.0) * fw)
+        wy = int(y_off + fh - (fy / (160.0 / 3.0)) * fh)
+        return wx, wy
+
+    def _near_snap(self):
+        """True when the current frame sits in the pre-snap window, where the
+        classed formation snapshot is the truthful picture to show."""
+        snap = self.formation_snapshot
+        if not snap:
+            return False
+        sf = snap.get("snap_frame")
+        if sf is None or not self.homography_data:
+            return True  # static snapshot is all we have
+        return abs(int(self.current_frame) - int(sf)) <= 20
+
+    def _paint_los(self, painter):
+        """Line of scrimmage + attack-direction arrow from the snapshot."""
+        snap = self.formation_snapshot
+        if not snap:
+            return
+        los = snap.get("los") or {}
+        los_x = los.get("x_yd")
+        if los_x is None:
+            return
+        attack_dir = int(los.get("attack_dir_x", snap.get("attack_dir_x", 1)) or 1)
+        x_off, y_off, fw, fh = self._field_rect()
+        lx, _ = self._to_widget(los_x, 0)
+        painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DashLine))
+        painter.drawLine(lx, y_off, lx, y_off + fh)
+        # Attack-direction arrow from the LOS toward the defense.
+        arrow_len = max(18, fw // 12)
+        ax1 = lx + attack_dir * arrow_len
+        ay = y_off + 16
+        painter.setPen(QPen(QColor(220, 40, 40), 3))
+        painter.drawLine(lx, ay, ax1, ay)
+        painter.drawLine(ax1, ay, ax1 - attack_dir * 7, ay - 5)
+        painter.drawLine(ax1, ay, ax1 - attack_dir * 7, ay + 5)
+
+    def _paint_snapshot_players(self, painter):
+        """The classed pre-snap picture: offense red / defense blue / QB gold,
+        thick rings on the line-of-scrimmage front, QB + Center labeled."""
+        snap = self.formation_snapshot
+        x_off, y_off, fw, fh = self._field_rect()
+        OFFENSE = QColor(220, 40, 40)
+        DEFENSE = QColor(40, 90, 220)
+        QB_GOLD = QColor(255, 200, 0)
+
+        labels = []
+        for p in snap.get("players", []):
+            fx, fy = p.get("x"), p.get("y")
+            if fx is None or fy is None:
+                continue
+            wx, wy = self._to_widget(fx, fy)
+            if not (x_off <= wx <= x_off + fw and y_off <= wy <= y_off + fh):
+                continue
+            is_qb = (p.get("grp") == "qb" or p.get("pos") == "qb" or p.get("role") == "qb")
+            color = QB_GOLD if is_qb else (OFFENSE if p.get("team") == "offense" else DEFENSE)
+            painter.setBrush(QBrush(color))
+            # Players ON the line of scrimmage get a thick white ring so the
+            # "front count" is visually countable; others a thin ring.
+            on_line = (p.get("pos") == "line")
+            painter.setPen(QPen(QColor(255, 255, 255), 3 if on_line else 1))
+            r = 8 if on_line else 7
+            painter.drawEllipse(wx - r, wy - r, 2 * r, 2 * r)
+            if is_qb:
+                labels.append((wx, wy, "QB", QB_GOLD))
+            elif p.get("ctr"):
+                labels.append((wx, wy, "C", QColor(255, 255, 255)))
+        # Labels last so dots never cover them.
+        painter.setFont(QFont("Arial", 9, QFont.Bold))
+        for wx, wy, text, color in labels:
+            painter.setPen(QPen(QColor(0, 0, 0), 1))
+            painter.drawText(wx + 10, wy + 5, text)
+            painter.setPen(QPen(color, 1))
+            painter.drawText(wx + 9, wy + 4, text)
+
+    def _paint_info_panel(self, painter):
+        """Top-left panel: the formation read at a glance -- predicted name,
+        front/box counts, strength, receivers per side, QB/C/team status."""
+        snap = self.formation_snapshot or {}
+        lines = []  # (text, color)
+        WHITE = QColor(255, 255, 255)
+        GREY = QColor(190, 190, 190)
+        CYAN = QColor(0, 200, 255)
+        AMBER = QColor(255, 191, 0)
+
+        if self.formation_name:
+            text = f"FORMATION: {self.formation_name.upper().replace('_', ' ')}"
+            if self.formation_confidence is not None:
+                try:
+                    text += f"  ({float(self.formation_confidence):.2f})"
+                except (TypeError, ValueError):
+                    pass
+            lines.append((text, CYAN))
+
+        if snap.get("on_line_count") is not None:
+            reliable = snap.get("reliable")
+            bucket = snap.get("bucket") or "--"
+            strength = snap.get("strength") or "--"
+            flag = "" if reliable else "  (?)"
+            lines.append((f"READ: {bucket}  ·  STRENGTH {strength}{flag}",
+                          WHITE if reliable else AMBER))
+            lines.append((f"FRONT: {snap.get('on_line_count')} on line  ·  "
+                          f"BOX {snap.get('box_count', '--')}", WHITE))
+            rl, rr = snap.get("recv_left"), snap.get("recv_right")
+            if rl is not None:
+                lines.append((f"RECEIVERS: {rl} left  /  {rr} right", WHITE))
+            qb_ok = "✓" if snap.get("qb_recovered") else "--"
+            c_ok = "✓" if snap.get("center_found") else "--"
+            n_off = snap.get("n_offense", "--")
+            n_def = snap.get("n_defense", "--")
+            lines.append((f"QB {qb_ok}  ·  C {c_ok}  ·  OFF {n_off}  ·  DEF {n_def}", GREY))
+            src = snap.get("team_source")
+            if src:
+                lines.append((f"TEAMS: {'jersey colour' if src == 'jersey_color' else 'detector class'}",
+                              GREY))
+
+        if not lines:
+            return
+        x_off, y_off, _, _ = self._field_rect()
+        painter.setFont(QFont("Arial", 10, QFont.Bold))
+        fm = painter.fontMetrics()
+        tw = max(fm.horizontalAdvance(t) for t, _ in lines)
+        th = fm.height()
+        pad = 8
+        painter.fillRect(x_off + 6, y_off + 6, tw + 2 * pad, th * len(lines) + 2 * pad,
+                         QColor(0, 0, 0, 180))
+        for i, (text, color) in enumerate(lines):
+            painter.setPen(QPen(color, 1))
+            painter.drawText(x_off + 6 + pad, y_off + 6 + pad + fm.ascent() + i * th, text)
+
+    def _paint_team_legend(self, painter):
+        x_off, y_off, fw, fh = self._field_rect()
+        painter.setFont(QFont("Arial", 9, QFont.Bold))
+        painter.setPen(QPen(QColor(220, 40, 40)))
+        painter.drawText(x_off + 8, y_off + fh - 8, "● OFFENSE (attacking)")
+        painter.setPen(QPen(QColor(40, 90, 220)))
+        painter.drawText(x_off + 158, y_off + fh - 8, "● DEFENSE")
+        painter.setPen(QPen(QColor(255, 200, 0)))
+        painter.drawText(x_off + 238, y_off + fh - 8, "● QB")
     
     def paintEvent(self, event):
         """Paint the field with player dots"""
@@ -134,8 +397,32 @@ class VirtualFieldWidget(QWidget):
             scaled_field = self.field_image.scaled(field_width, field_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             painter.drawPixmap(field_x_offset, field_y_offset, scaled_field)
         
+        # Team colors so the per-frame tracking reads as offense vs defense + QB
+        # (the field FOLLOWS the video frame by frame; coloring is by team, not
+        # by the per-class palette). QB highlighted gold.
+        OFFENSE = QColor(220, 40, 40)
+        DEFENSE = QColor(40, 90, 220)
+        QB_GOLD = QColor(255, 200, 0)
+        OFFENSE_LABELS = {"oline", "qb", "running_back", "wide_receiver", "tight_end"}
+
+        def team_color(label):
+            if label == "qb":
+                return QB_GOLD
+            if label in OFFENSE_LABELS:
+                return OFFENSE
+            if label == "defense":
+                return DEFENSE
+            return QColor(150, 150, 150)  # ref / unknown
+
+        # In the pre-snap window the classed formation snapshot (offense vs
+        # defense, who is on the line, QB + Center) is the truthful picture --
+        # show it instead of the raw live dots.
+        near_snap = self._near_snap() and bool((self.formation_snapshot or {}).get("players"))
+        if near_snap:
+            self._paint_snapshot_players(painter)
+
         # Draw player dots if we have homography data
-        if self.homography_data and 'normalized_positions' in self.homography_data:
+        if not near_snap and self.homography_data and 'normalized_positions' in self.homography_data:
             normalized_positions = self.homography_data['normalized_positions']
             frame_key = str(self.current_frame)
             
@@ -177,26 +464,46 @@ class VirtualFieldWidget(QWidget):
                     field_bottom = field_y_offset + field_height
                     
                     if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
-                        # Get color from the map, using 'player' as default fallback
-                        dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
-                        # dot_color = POSITION_COLORS['player']
-                        
+                        # Stable whole-clip team from assignTeamColors (jersey
+                        # colour, written into normalized_positions) -- trusted
+                        # only when the split was flagged reliable. QB shown gold
+                        # where the role detector saw it (snap window).
+                        team = player.get('team') if getattr(self, '_team_reliable', False) else None
+                        role = self._role_for_dot(self.current_frame, player.get('original_bbox'))
+                        if role == 'qb':
+                            dot_color = QB_GOLD
+                        elif team == 'offense':
+                            dot_color = OFFENSE
+                        elif team == 'defense':
+                            dot_color = DEFENSE
+                        else:
+                            dot_color = team_color(role or object_label)
+
                         # Draw player dot - make it more visible
-                        painter.setBrush(QBrush(dot_color))  
+                        painter.setBrush(QBrush(dot_color))
                         painter.setPen(QPen(QColor(255, 255, 255), 3))  # Thicker white border
                         painter.drawEllipse(widget_x - 8, widget_y - 8, 16, 16)  # Larger dot
-                        
-                        # Draw object label text (Position Class)
-                        painter.setPen(QPen(QColor(255, 255, 255)))
-                        # Move text slightly below the center of the dot
-                        # painter.drawText(widget_x - 7, widget_y + 5, object_label.upper()) 
 
-             
-        
-        # Draw frame number
-        painter.setPen(QPen(QColor(0, 0, 0)))  # Black text
-        painter.drawText(10, 20, f"Frame: {self.current_frame}")
-        
+                        # The QB stays labeled while the play runs.
+                        if role == 'qb':
+                            painter.setFont(QFont("Arial", 9, QFont.Bold))
+                            painter.setPen(QPen(QColor(0, 0, 0), 1))
+                            painter.drawText(widget_x + 11, widget_y + 5, "QB")
+                            painter.setPen(QPen(QB_GOLD, 1))
+                            painter.drawText(widget_x + 10, widget_y + 4, "QB")
+
+        # Always-on overlays: line of scrimmage + attack arrow, the formation
+        # info panel (top-left), and the team-colour legend.
+        self._paint_los(painter)
+        self._paint_info_panel(painter)
+        self._paint_team_legend(painter)
+
+        # Draw frame number (bottom-right corner, clear of panel and legend)
+        x_off, y_off, fw, fh = self._field_rect()
+        painter.setFont(QFont("Arial", 9))
+        painter.setPen(QPen(QColor(255, 255, 255)))
+        painter.drawText(x_off + fw - 90, y_off + fh - 8, f"Frame: {self.current_frame}")
+
         painter.end()
 
 def draw_field(ax, correspondence_points=None):
@@ -575,6 +882,13 @@ def load_homography_data_for_virtual_field(parent, video_name, folder_name):
     """Load homography data for the virtual field"""
     if hasattr(parent, 'virtual_field'):
         return parent.virtual_field.load_homography_data(video_name, folder_name)
+    return False
+
+
+def load_formation_snapshot_for_virtual_field(parent, video_name, folder_name):
+    """Load the pre-snap formation snapshot (offense/defense + LOS) for the field."""
+    if hasattr(parent, 'virtual_field'):
+        return parent.virtual_field.load_formation_snapshot(video_name, folder_name)
     return False
 
 def create_scoreboard(parent):

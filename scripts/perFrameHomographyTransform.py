@@ -11,20 +11,14 @@ import sys
 import numpy as np
 import cv2
 
+# Shared JSON helpers (this module's directory is on sys.path when run as a
+# script, and callers in formations/ add scripts/ to sys.path before importing).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ioutils import load_json, save_json
+
 # NCAA Field dimensions (in yards) - consistent with virtualField.py
 FIELD_LENGTH_YD = 120.0  # 120 yards (0-120)
 FIELD_WIDTH_YD = 160.0 / 3.0  # ~53.33 yards (0-53.33)
-
-def load_json_data(file_path):
-    """Load JSON data from a file."""
-    with open(file_path, 'r') as f:
-        return json.load(f)
-
-def save_json_data(data, file_path):
-    """Save JSON data to a file."""
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, 'w') as f:
-        json.dump(data, f, indent=2)
 
 def get_homography_matrix(image_points, field_points):
     """
@@ -130,10 +124,10 @@ def process_per_frame_homography(position_detections_path, correspondence_points
         output_path (str): Path to save the output normalized positions JSON file.
     """
     print(f"Loading position detections from: {position_detections_path}")
-    position_data = load_json_data(position_detections_path)
-    
+    position_data = load_json(position_detections_path)
+
     print(f"Loading correspondence points from: {correspondence_points_path}")
-    correspondence_data = load_json_data(correspondence_points_path)
+    correspondence_data = load_json(correspondence_points_path)
 
     total_frames = position_data.get('total_frames', 0)
     if not total_frames:
@@ -238,7 +232,7 @@ def process_per_frame_homography(position_detections_path, correspondence_points
     normalized_positions_output['frames_processed'] = total_frames
     normalized_positions_output['frames_with_sufficient_markers'] = frames_with_sufficient_markers
     
-    save_json_data(normalized_positions_output, output_path)
+    save_json(normalized_positions_output, output_path)
     print(f"Normalized positions saved to: {output_path}")
     print(f"Total frames: {total_frames}, Frames with sufficient markers: {frames_with_sufficient_markers}")
 

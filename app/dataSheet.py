@@ -134,8 +134,33 @@ def load_csv_file(parent, csv_path):
         return True
     return False
 
+def select_row_for_video(parent, video_name):
+    """Highlight (and scroll to) the sheet row whose CLIP NAME matches the
+    video now playing -- so opening a clip from the file tree shows its
+    breakdown row. Matching is by name, the same key the labels use."""
+    model = getattr(parent, "csv_model", None)
+    if model is None or model._data.empty or not model.video_clip_column:
+        return
+    target = os.path.splitext(str(video_name))[0].strip()
+    names = model._data[model.video_clip_column].astype(str).str.strip()
+    hits = (names.values == target).nonzero()[0]
+    if len(hits) == 0:
+        return
+    row = int(hits[0])
+    # Selecting the row would re-trigger on_row_selected and reload the same
+    # video; the guard makes the sync one-way.
+    parent._syncing_sheet_selection = True
+    try:
+        parent.tableView.selectRow(row)
+        parent.tableView.scrollTo(model.index(row, 0))
+    finally:
+        parent._syncing_sheet_selection = False
+
+
 def on_row_selected(parent):
     """Handle row selection to play corresponding video clip"""
+    if getattr(parent, "_syncing_sheet_selection", False):
+        return
     selected_indexes = parent.tableView.selectionModel().selectedRows()
     if not selected_indexes:
         return

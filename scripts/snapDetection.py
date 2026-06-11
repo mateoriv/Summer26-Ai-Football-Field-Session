@@ -29,14 +29,9 @@ import argparse
 import numpy as np
 from scipy.spatial.distance import cdist
 
-
-# ------------------------------------------------------------------
-# I/O
-# ------------------------------------------------------------------
-
-def load_player_detections(path):
-    with open(path, "r") as f:
-        return json.load(f)
+# Shared JSON loader (this script's directory is on sys.path when run directly).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ioutils import load_json
 
 
 # ------------------------------------------------------------------
@@ -425,7 +420,7 @@ def main():
     args = parser.parse_args()
 
     print(f"[INFO] Loading detections from: {args.player_detections}")
-    raw = load_player_detections(args.player_detections)
+    raw = load_json(args.player_detections)
 
     print("[INFO] Computing camera-corrected velocities...")
     velocities, mover_counts, player_counts, fps = compute_velocity(raw, min_players_per_frame=args.min_players)

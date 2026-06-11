@@ -4,9 +4,19 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QDir, QFileInfo
 import os
+import re
 import sys
 from pathlib import Path
 import pandas as pd
+
+# Video types the app can open (tree view, auto-load, click-to-play).
+VIDEO_EXTS = ('.mp4', '.avi', '.mov', '.mkv', '.wmv')
+
+
+def natural_key(name):
+    """Sort key putting 'Clip 2' before 'Clip 10' (numeric runs compared as
+    numbers, the rest case-insensitively) -- the order the label sheet expects."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(name))]
 
 def _get_exe_dir():
     """Return the directory that contains (or should contain) bundled resources.
@@ -124,9 +134,12 @@ def create_file_dock(parent):
 
     # Tree view for navigation
     parent.tree_model = QFileSystemModel()
-    
-    # Only show directories, no files
-    parent.tree_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
+
+    # Show directories AND video files -- a folder may hold the clips directly,
+    # with no subfolders to click. Non-video files stay hidden.
+    parent.tree_model.setFilter(QDir.AllDirs | QDir.Files | QDir.NoDotAndDotDot)
+    parent.tree_model.setNameFilters([f"*{ext}" for ext in VIDEO_EXTS])
+    parent.tree_model.setNameFilterDisables(False)  # hide non-matching files (don't grey them)
     
     parent.tree_view = QTreeView()
     parent.tree_view.setModel(parent.tree_model)
@@ -170,8 +183,20 @@ def initialize_empty_tree_view(parent):
 
 def on_tree_clicked(parent, index):
     """Handle single click on tree view items - load folder content but don't change tree view"""
-    # Since we only show directories now, we can directly check for MP4 files
     path = parent.tree_model.filePath(index)
+
+    # A video file: open exactly that clip. If its folder isn't the loaded one
+    # yet, load the folder context (CSV, cache) around the clicked clip.
+    if os.path.isfile(path):
+        if path.lower().endswith(VIDEO_EXTS):
+            folder = os.path.dirname(path)
+            if getattr(parent, "current_folder", None) != folder:
+                load_folder(parent, folder, change_view=False,
+                            preferred_video=os.path.basename(path))
+            elif hasattr(parent, 'open_video_file'):
+                parent.open_video_file(path)
+        return
+
     if has_mp4(path):
         load_folder(parent, path, change_view=False)
     else:
@@ -193,28 +218,29 @@ def on_tree_double_clicked(parent, index):
     # double-click should do the same as single for now
     on_tree_clicked(parent, index)
 
-def load_folder(parent, folder_path, change_view=False):
+def load_folder(parent, folder_path, change_view=False, preferred_video=None):
     parent.current_folder = folder_path
-    
+
     # Change the tree view only if explicitly requested (from Open Folder button)
     if change_view:
         # Set the root path for the model first
         parent.tree_model.setRootPath(folder_path)
         tree_index = parent.tree_model.index(folder_path)
         parent.tree_view.setRootIndex(tree_index)
-        
+
         # Make the tree view visible when a folder is loaded
         parent.tree_view.setVisible(True)
-    
+
     # Only auto-load if the folder actually contains video files
     # This prevents loading parent directories that don't have videos
     if has_mp4(folder_path):
-        auto_load_folder_content(parent, folder_path)
+        auto_load_folder_content(parent, folder_path, preferred_video=preferred_video)
     else:
         print(f"[INFO] Folder does not contain MP4 files, skipping auto-load: {folder_path}")
 
-def auto_load_folder_content(parent, folder_path):
-    """Automatically load first CSV and first video from the folder"""
+def auto_load_folder_content(parent, folder_path, preferred_video=None):
+    """Load the folder's CSV and a video: `preferred_video` (the clicked clip)
+    when given, else the first clip in natural order."""
     try:
         # Ensure folder_path is absolute and exists
         folder_path = os.path.abspath(folder_path)
@@ -240,10 +266,14 @@ def auto_load_folder_content(parent, folder_path):
                 if f.lower().endswith('.csv') and os.path.isfile(os.path.join(cache_dir, f))
             ]
         
-        # Find all video files in the video folder
-        video_files = [f for f in os.listdir(folder_path) 
-                      if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.wmv')) 
-                      and os.path.isfile(os.path.join(folder_path, f))]
+        # Find all video files in the video folder, in natural clip order
+        # ('Clip 2' before 'Clip 10') so the CSV rows and the auto-loaded
+        # first video follow the label sheet's order.
+        video_files = sorted(
+            (f for f in os.listdir(folder_path)
+             if f.lower().endswith(VIDEO_EXTS)
+             and os.path.isfile(os.path.join(folder_path, f))),
+            key=natural_key)
         
         # Create CSV with video titles if none exists and videos are present
         if not csv_files and video_files:
@@ -271,11 +301,12 @@ def auto_load_folder_content(parent, folder_path):
             else:
                 print(f"Warning: CSV file not found: {first_csv}")
         
-        # Load and play first video if available
+        # Load and play a video: the clicked one when given, else the first.
         if video_files and hasattr(parent, 'open_video_file'):
-            first_video = os.path.join(folder_path, video_files[0])
-            parent.open_video_file(first_video)
-            print(f"Playing video: {video_files[0]}")
+            chosen_video = (preferred_video
+                            if preferred_video in video_files else video_files[0])
+            parent.open_video_file(os.path.join(folder_path, chosen_video))
+            print(f"Playing video: {chosen_video}")
             
 
     except Exception as e:
@@ -300,8 +331,10 @@ def create_video_based_csv(output_dir, video_files, folder_name=None):
         # Ensure output directory exists
         os.makedirs(output_dir, exist_ok=True)
         
-        # Create CSV with video clip names as the first column
-        video_names = [os.path.splitext(video)[0] for video in video_files]  # Remove extensions
+        # Create CSV with video clip names as the first column, in natural
+        # clip order ('Clip 2' before 'Clip 10') -- the label sheet's order.
+        video_names = sorted((os.path.splitext(video)[0] for video in video_files),
+                             key=natural_key)
         
         # Create default data structure with video names as the first column
         default_data = {
@@ -311,6 +344,9 @@ def create_video_based_csv(output_dir, video_files, folder_name=None):
             'PERSONNEL' : 0,
             'BACKFIELD' : "",
             'FIB/FSL' : "",
+            'FRONT COUNT': "",
+            'FRONT STRENGTH': "",
+            'FRONT RELIABLE': "",
             'OFF FORM' : "",
             'TEMPLATE FORM': "",
             'TEMPLATE SCORE': "",

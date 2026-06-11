@@ -7,6 +7,7 @@ from PySide6.QtGui import QPainter, QPen, QFont, QColor, QBrush, QImage, QPixmap
 
 import json
 import os
+import sys
 import cv2
 import numpy as np
 import pandas as pd
@@ -297,7 +298,7 @@ class CustomVideoWidget(QWidget):
 
                 for data in video_data_sources:
                     current_detections = self._get_detections_for_frame(self.current_frame, data)
-                    
+
                     if current_detections:
                         # Determine resolution for scaling
                         video_width = 1280
@@ -306,13 +307,24 @@ class CustomVideoWidget(QWidget):
                             video_info = data['video_info']
                             video_width = video_info.get('width', video_width)
                             video_height = video_info.get('height', video_height)
-                        
+
                         # Calculate scaling factors
                         scale_x = scaled_pixmap.width() / video_width
                         scale_y = scaled_pixmap.height() / video_height
-                        
+
+                        # The CENTER (the lineman the QB works with) gets its own
+                        # tag, like the QB -- found per frame as the oline nearest
+                        # the QB.
+                        center_det = (self._find_center_detection(current_detections)
+                                      if data is self.position_detection_data else None)
                         for detection in current_detections:
-                            self._draw_single_bbox(painter, detection, scale_x, scale_y, x_offset, y_offset)
+                            self._draw_single_bbox(painter, detection, scale_x, scale_y,
+                                                   x_offset, y_offset,
+                                                   is_center=(detection is center_det))
+
+                # Team-colour legend so red/blue/gold reads without a manual.
+                if self.show_boxes and self.position_detection_data:
+                    self._draw_team_legend(painter, x_offset, y_offset, scaled_pixmap.width())
             else:
                 # Draw black background if no frame
                 painter.fillRect(self.rect(), QColor(0, 0, 0))
@@ -350,7 +362,7 @@ class CustomVideoWidget(QWidget):
 
         lines = []  # (text, color)
         if self.model_label:
-            text = f"M: {model_name or '--'}"
+            text = f"FORMATION: {model_name or '--'}"
             if self.model_confidence is not None:
                 try:
                     text += f"  ({float(self.model_confidence):.2f})"
@@ -410,6 +422,62 @@ class CustomVideoWidget(QWidget):
             painter.setPen(QPen(color, 1))
             painter.drawText(int(bx + pad), int(by + pad + fm.ascent() + i * th), text)
 
+    def _find_center_detection(self, detections):
+        """The CENTER = the 'oline' detection nearest the QB in this frame.
+
+        The QB lines up directly behind its snapper, so pixel distance to the
+        QB box picks the right lineman without any field projection. Returns
+        None when there is no QB or no oline in the frame.
+        """
+        def _center_of(d):
+            b = d.get('bbox') or {}
+            cx = b.get('center_x')
+            cy = b.get('center_y')
+            if cx is None and 'x1' in b:
+                cx = (b['x1'] + b['x2']) / 2.0
+                cy = (b['y1'] + b['y2']) / 2.0
+            return cx, cy
+
+        qbs = [d for d in detections if str(d.get('class', '')).lower() == 'qb']
+        olines = [d for d in detections if str(d.get('class', '')).lower() == 'oline']
+        if not qbs or not olines:
+            return None
+        qb = max(qbs, key=lambda d: d.get('confidence') or 0.0)
+        qx, qy = _center_of(qb)
+        if qx is None:
+            return None
+        best, best_d = None, float('inf')
+        for d in olines:
+            cx, cy = _center_of(d)
+            if cx is None:
+                continue
+            dd = (cx - qx) ** 2 + (cy - qy) ** 2
+            if dd < best_d:
+                best_d, best = dd, d
+        return best
+
+    def _draw_team_legend(self, painter, x_offset, y_offset, video_width_px):
+        """Compact colour legend in the top-right video corner:
+        offense = red, defense = blue, QB = gold."""
+        entries = [("OFFENSE", QColor(220, 40, 40)),
+                   ("DEFENSE", QColor(40, 90, 220)),
+                   ("QB", QColor(255, 200, 0))]
+        painter.setFont(QFont("Arial", 11, QFont.Bold))
+        fm = painter.fontMetrics()
+        sw, gap, pad = 10, 8, 8  # swatch size, spacing, box padding
+        w = sum(sw + 4 + fm.horizontalAdvance(t) + gap for t, _ in entries) - gap
+        h = max(fm.height(), sw)
+        bx = x_offset + video_width_px - w - 2 * pad - 12
+        by = y_offset + 12
+        painter.fillRect(QRectF(bx, by, w + 2 * pad, h + 2 * pad), QBrush(QColor(0, 0, 0, 170)))
+        cx = bx + pad
+        cy = by + pad
+        for text, color in entries:
+            painter.fillRect(QRectF(cx, cy + (h - sw) / 2, sw, sw), QBrush(color))
+            painter.setPen(QPen(QColor(255, 255, 255), 1))
+            painter.drawText(int(cx + sw + 4), int(cy + (h + fm.ascent() - fm.descent()) / 2), text)
+            cx += sw + 4 + fm.horizontalAdvance(text) + gap
+
     def _get_detections_for_frame(self, frame_number, data_source):
         """
         [UNIFIED] Get detections for a specific frame number from a given data source (internal helper).
@@ -436,10 +504,12 @@ class CustomVideoWidget(QWidget):
         
         return []
     
-    def _draw_single_bbox(self, painter, detection, scale_x, scale_y, x_offset=0, y_offset=0):
+    def _draw_single_bbox(self, painter, detection, scale_x, scale_y, x_offset=0, y_offset=0,
+                          is_center=False):
         """
         Draw a single bounding box with dynamic styling based on class (internal helper).
         Uses POSITION_COLORS for dynamic coloring.
+        `is_center`: this oline detection is the snapper -- gets a "C" tag.
         """
         bbox = detection.get('bbox', {})
         if not bbox or 'x1' not in bbox:
@@ -462,8 +532,19 @@ class CustomVideoWidget(QWidget):
         if class_name in YARD_MARKERS:
             class_name = "yard_marker"
 
-        # Default box color
-        box_color = POSITION_COLORS.get(class_name.lower(), POSITION_COLORS['player'])
+        # Color by TEAM so the video matches the virtual field: offense = red,
+        # defense = blue, QB = gold. (The per-class palette read as noise.)
+        _cl = class_name.lower()
+        if _cl == "qb":
+            box_color = QColor(255, 200, 0)
+        elif _cl in ("oline", "running_back", "wide_receiver", "tight_end"):
+            box_color = QColor(220, 40, 40)
+        elif _cl == "defense":
+            box_color = QColor(40, 90, 220)
+        elif _cl == "yard_marker":
+            box_color = POSITION_COLORS["yard_marker"]
+        else:
+            box_color = QColor(150, 150, 150)
 
         # Optionally highlight boxes that are part of the selected 11 offensive players
         if getattr(self, "show_offense_selection", False) and self.offense_selection_points:
@@ -483,9 +564,25 @@ class CustomVideoWidget(QWidget):
         # Draw bounding box
         painter.setPen(QPen(box_color, 3))
         # Use a semi-transparent brush
-        painter.setBrush(QBrush(QColor(box_color.red(), box_color.green(), box_color.blue(), 50))) 
+        painter.setBrush(QBrush(QColor(box_color.red(), box_color.green(), box_color.blue(), 50)))
         painter.drawRect(scaled_x, scaled_y, scaled_w, scaled_h)
-        
+
+        # Role tags above the box: gold "QB" on the quarterback, red "C" on the
+        # snapper -- the two anchors the analyst reads the formation from.
+        tag_text, tag_bg, tag_fg = None, None, None
+        if _cl == "qb":
+            tag_text, tag_bg, tag_fg = "QB", QColor(255, 200, 0), QColor(0, 0, 0)
+        elif is_center:
+            tag_text, tag_bg, tag_fg = "C", QColor(220, 40, 40), QColor(255, 255, 255)
+        if tag_text:
+            painter.setFont(QFont("Arial", 11, QFont.Bold))
+            fm = painter.fontMetrics()
+            tw = fm.horizontalAdvance(tag_text)
+            tag = QRectF(scaled_x, scaled_y - fm.height() - 4, tw + 8, fm.height() + 2)
+            painter.fillRect(tag, QBrush(tag_bg))
+            painter.setPen(QPen(tag_fg, 1))
+            painter.drawText(int(scaled_x + 4), int(scaled_y - 6), tag_text)
+
         # # Draw label if yard marker
         if class_name == "yard_marker":
             class_name = detection.get('class', 'player')
@@ -1301,6 +1398,10 @@ def set_current_video_path(parent, video_path):
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         from virtualField import load_homography_data_for_virtual_field
         homography_loaded = load_homography_data_for_virtual_field(parent, video_name, parent.current_folder)
+        # Load the classed pre-snap snapshot so the field shows offense vs
+        # defense + the line of scrimmage (falls back to generic dots if absent).
+        from virtualField import load_formation_snapshot_for_virtual_field
+        load_formation_snapshot_for_virtual_field(parent, video_name, parent.current_folder)
         # If homography data not found, ensure virtual field is cleared
         if not homography_loaded:
             # Clear the virtual field display
@@ -1319,14 +1420,20 @@ def set_current_video_path(parent, video_path):
     # Load the recognized offense formation for the corner overlay.
     _load_formation_label_for_current_video(parent)
 
+    # Highlight this clip's row in the data sheet (matched by CLIP NAME).
+    try:
+        from dataSheet import select_row_for_video
+        select_row_for_video(parent, os.path.basename(video_path))
+    except Exception as e:
+        print(f"[SHEET] row sync skipped: {e}")
+
 
 def _load_formation_label_for_current_video(parent):
-    """Read the M/QB/COACH labels for the current clip from the data CSV and
-    push them to the video widget's corner overlay (no-op when not processed).
-
-    M  <- OFF FORM (+ OFF FORM CONFIDENCE)         (MLP model)
-    QB <- QB FORM (+ QB SCORE, QB RELIABLE)        (QB-anchored matcher)
-    COACH <- COACH FORM
+    """Determine the offense formation LIVE from the template matcher (matches
+    the 17 CSV templates against the cached snap) and push the name + confidence
+    to the video widget's corner overlay. Reads the existing cache only -- no
+    reprocessing. The coach's hand label, when present in the data CSV, is shown
+    underneath for comparison.
     """
     try:
         if not getattr(parent, "custom_video", None):
@@ -1338,46 +1445,55 @@ def _load_formation_label_for_current_video(parent):
 
         video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
         folder_name = os.path.basename(parent.current_folder.rstrip("/\\"))
-        data_csv = os.path.join(get_cache_dir(), folder_name, f"{folder_name}_data.csv")
-        if not os.path.exists(data_csv):
+
+        # --- Determined formation from the template matcher (the CSV method) --- #
+        model_form, model_conf, reliable = "", None, True
+        try:
+            _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+            for _p in (os.path.join(_base, "formations"), os.path.join(_base, "scripts")):
+                if _p not in sys.path:
+                    sys.path.append(_p)
+            import template_matcher as _tm
+            res = _tm.recognize_from_cache(video_name, folder_name, get_cache_dir())
+            if res and res.get("formation"):
+                model_form = str(res["formation"])
+                model_conf = res.get("score")
+                reliable = bool(res.get("reliable", True))
+        except Exception as e:
+            print(f"[FORMATION] matcher unavailable: {e}")
+
+        # --- Coach ground-truth label from the data CSV, if charted ----------- #
+        coach_form = ""
+        try:
+            data_csv = os.path.join(get_cache_dir(), folder_name, f"{folder_name}_data.csv")
+            if os.path.exists(data_csv):
+                df = pd.read_csv(data_csv)
+                if "CLIP NAME" in df.columns:
+                    row = df.loc[df["CLIP NAME"].astype(str) == video_name]
+                    if not row.empty:
+                        for col in ("COACH FORM", "FORMATION", "OFF FORM"):
+                            v = row.iloc[0].get(col) if col in row.columns else None
+                            if v is not None and not pd.isna(v) and str(v).strip():
+                                coach_form = str(v).strip()
+                                break
+        except Exception:
+            pass
+
+        # The virtual-field info panel shows the same predicted formation.
+        if hasattr(parent, "virtual_field"):
+            parent.virtual_field.set_formation_info(model_form, model_conf)
+
+        if not model_form and not coach_form:
             clear()
             return
-
-        df = pd.read_csv(data_csv)
-        row = df.loc[df["CLIP NAME"].astype(str) == video_name] if "CLIP NAME" in df.columns else None
-        if row is None or row.empty:
-            clear()
-            return
-        row = row.iloc[0]
-
-        def s(col):
-            v = row.get(col) if col in row.index else ""
-            return "" if pd.isna(v) else str(v).strip()
-
-        def f(col):
-            v = row.get(col) if col in row.index else None
-            if v is None or pd.isna(v):
-                return None
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                return None
-
-        model_form = s("OFF FORM")
-        model_conf = f("OFF FORM CONFIDENCE")
-        qb_form = s("QB FORM")
-        qb_score = f("QB SCORE")
-        qb_reliable_raw = s("QB RELIABLE")
-        qb_reliable = qb_reliable_raw.lower() != "false" if qb_reliable_raw else True
-        coach_form = s("COACH FORM")
 
         parent.custom_video.set_formation_labels(
             model=model_form, model_conf=model_conf,
-            qb=qb_form, qb_score=qb_score, qb_reliable=qb_reliable,
+            qb="", qb_score=None, qb_reliable=reliable,
             coach=coach_form,
         )
-        print(f"[FORMATION] {video_name}: M={model_form or '--'} "
-              f"QB={qb_form or '--'} coach={coach_form or '--'}")
+        print(f"[FORMATION] {video_name}: {model_form or '--'} "
+              f"(conf={model_conf}) reliable={reliable} coach={coach_form or '--'}")
     except Exception as e:
         print(f"[FORMATION] Could not load formation label: {e}")
 
