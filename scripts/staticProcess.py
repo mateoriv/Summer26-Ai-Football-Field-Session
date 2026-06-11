@@ -485,7 +485,7 @@ def _determine_backfield_type(video_name, folder_name, base_cache_dir):
         depth = qb_nx - oline_mean_nx   # oline closer to LOS = smaller nx for right offense
 
     print(f"[INFO] Backfield depth: {depth:.2f} yards (offense_side={offense_side})")
-    return "GUN" if depth >= 1.0 else "UNDER CENTER"
+    return "GUN" if depth >= .3 else "UNDER CENTER"
 
 
 def load_data(file_path):

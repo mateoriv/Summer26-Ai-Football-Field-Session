@@ -337,7 +337,7 @@ class CustomVideoWidget(QWidget):
                 box_color = POSITION_COLORS['defense']             # gray
             elif class_name == 'qb':
                 box_color = POSITION_COLORS['qb']                  # yellow
-            elif class_name == 'wide_receiver':
+            elif class_name in ('wide_receiver', 'tight_end'):
                 box_color = POSITION_COLORS['wide_receiver']       # cyan
             else:
                 box_color = POSITION_COLORS['oline']               # blue for other offense
@@ -1341,18 +1341,7 @@ def toggle_bounding_boxes(parent, button):
 
 
 def _ensure_qb_labeled(positions_data):
-    """Geometric fallbacks for QB and WR labeling when the model misclassifies.
-
-    Pass 1 — WR fallback:
-      Offense players whose image-y is more than 1.5 standard deviations from the
-      formation's mean-y are split wide and should be wide receivers.  Only generic
-      labels ('oline', 'running_back', 'player') are overridden — model-detected
-      'wide_receiver' and 'tight_end' labels are kept as-is.
-
-    Pass 2 — QB fallback (only when no QB was detected):
-      Among the remaining interior (non-WR / non-TE) players, the one deepest in
-      the backfield (most extreme image-x away from the defense) is labeled QB.
-    """
+    """QB fallback: when no QB was detected, the deepest backfield player gets labeled QB."""
     for frame_data in positions_data.get('frames', []):
         detections = frame_data.get('detections', [])
 
@@ -1368,10 +1357,12 @@ def _ensure_qb_labeled(positions_data):
         if len(off_dets) < 3:
             continue
 
+        if any(d.get('class', '').lower() == 'qb' for d in detections):
+            continue
+
         off_xs = [d['bbox']['center_x'] for d in off_dets]
         off_ys = [d['bbox']['center_y'] for d in off_dets]
 
-        # Determine which side of the image the offense occupies
         if def_xs:
             def_med_x = sorted(def_xs)[len(def_xs) // 2]
             left_count = sum(1 for x in off_xs if x < def_med_x)
@@ -1379,52 +1370,17 @@ def _ensure_qb_labeled(positions_data):
         else:
             offense_side = "left"
 
-        # --- Pass 1: WR fallback ---
+        # Exclude split-wide outliers (large Y deviation) from QB candidacy
         mean_y = sum(off_ys) / len(off_ys)
-        var_y  = sum((y - mean_y) ** 2 for y in off_ys) / len(off_ys)
-        std_y  = var_y ** 0.5
+        std_y = (sum((y - mean_y) ** 2 for y in off_ys) / len(off_ys)) ** 0.5
+        interior = ([d for d in off_dets if std_y == 0 or abs(d['bbox']['center_y'] - mean_y) <= 1.5 * std_y]
+                    or off_dets)
 
-        if std_y > 0:
-            for d in off_dets:
-                cls = d.get('class', '').lower()
-                if cls in ('qb', 'wide_receiver', 'tight_end'):
-                    continue  # keep model-confident labels
-                cy = d['bbox']['center_y']
-                if abs(cy - mean_y) > 1.5 * std_y:
-                    d['class'] = 'wide_receiver'
-                    print(f"[OFFENSE SELECTION] WR fallback: relabeled '{cls}' at "
-                          f"({d['bbox']['center_x']:.0f}, {cy:.0f})")
-
-        # --- Pass 2: QB and RB assignment ---
-        # Enforce exactly one QB per frame: the backfield player closest in Y to
-        # the snap center (mean Y of the oline).  All other backfield players
-        # (not WR/TE/oline) become running_back (orange).
-
-        oline_in_frame = [d for d in off_dets if d.get('class', '').lower() == 'oline']
-        if oline_in_frame:
-            oline_ys = [d['bbox']['center_y'] for d in oline_in_frame]
-            center_y = sum(oline_ys) / len(oline_ys)
-        else:
-            center_y = mean_y
-
-        backfield = [d for d in off_dets
-                     if d.get('class', '').lower() not in ('wide_receiver', 'tight_end', 'oline')]
-        if not backfield:
-            continue
-
-        qb_det = min(backfield, key=lambda d: abs(d['bbox']['center_y'] - center_y))
+        qb_det = (min(interior, key=lambda d: d['bbox']['center_x']) if offense_side == "left"
+                  else max(interior, key=lambda d: d['bbox']['center_x']))
         qb_det['class'] = 'qb'
-        print(f"[OFFENSE SELECTION] QB assigned at "
+        print(f"[OFFENSE SELECTION] QB fallback: assigned qb to player at "
               f"({qb_det['bbox']['center_x']:.0f}, {qb_det['bbox']['center_y']:.0f})")
-
-        for d in backfield:
-            if d is not qb_det:
-                d['class'] = 'running_back'
-
-        # Relabel any extra model-detected QBs
-        for d in detections:
-            if d.get('class', '').lower() == 'qb' and d is not qb_det:
-                d['class'] = 'running_back'
 
 
 def _load_position_data_for_offense_mode(parent):
@@ -1446,16 +1402,16 @@ def _load_position_data_for_offense_mode(parent):
     if not os.path.exists(positions_file):
         print(f"[OFFENSE SELECTION] Positions file not found: {positions_file}")
         return
+    PLAYER_POS_MATCH_PX = 150  # max center distance to pair a player bbox with a position label
+
     try:
         with open(positions_file, 'r') as f:
             data = json.load(f)
-        _ensure_qb_labeled(data)
 
-        # Patch each position detection's bbox with the tighter bbox from the
-        # player detector (bestPlayerDetectorM.pt).  The position model's boxes
-        # are loose because it was trained for positional classification, not
-        # tight localisation.  We keep the class labels from position detection
-        # (for colour coding) but swap the box geometry from the player detector.
+        # --- Merge: replace position-model bboxes with tight player-detector bboxes ---
+        # Iterate over player detections (accurate locations); for each one find the
+        # nearest position detection within PLAYER_POS_MATCH_PX and inherit its label.
+        # Player detections with no nearby position label are excluded (sideline/crowd).
         player_file = os.path.join(base_cache_dir, folder_name, "players",
                                    f"{video_name}_detection.json")
         if os.path.exists(player_file):
@@ -1463,20 +1419,18 @@ def _load_position_data_for_offense_mode(parent):
                 with open(player_file, 'r') as f:
                     player_data = json.load(f)
 
-                # Index player detections by frame number for O(1) lookup
+                # Index player detections by frame number
                 player_index = {}
                 for fr in player_data.get('frames', []):
                     fnum = fr.get('frame_number', 0)
-                    player_index[fnum] = [
-                        (d['bbox']['center_x'], d['bbox']['center_y'], d['bbox'])
-                        for d in fr.get('detections', [])
-                        if 'bbox' in d and 'center_x' in d['bbox']
-                    ]
+                    player_index[fnum] = fr.get('detections', [])
 
-                MATCH_THRESHOLD_SQ = 100 ** 2  # max 100-pixel center distance
+                threshold_sq = PLAYER_POS_MATCH_PX ** 2
 
                 for frame_data in data.get('frames', []):
                     fnum = frame_data.get('frame_number', 0)
+
+                    # Find player detections for this frame (or nearest within 5)
                     if fnum in player_index:
                         pl_dets = player_index[fnum]
                     elif player_index:
@@ -1485,25 +1439,61 @@ def _load_position_data_for_offense_mode(parent):
                     else:
                         pl_dets = []
 
-                    for pos_det in frame_data.get('detections', []):
-                        pos_bbox = pos_det.get('bbox', {})
-                        pcx = pos_bbox.get('center_x')
-                        pcy = pos_bbox.get('center_y')
-                        if pcx is None or pcy is None:
+                    pos_dets = frame_data.get('detections', [])
+
+                    merged = []
+                    for pl in pl_dets:
+                        pl_bbox = pl.get('bbox', {})
+                        plcx = pl_bbox.get('center_x')
+                        plcy = pl_bbox.get('center_y')
+                        if plcx is None or plcy is None:
                             continue
-                        best_dist, best_bbox = float('inf'), None
-                        for (plcx, plcy, pl_bbox) in pl_dets:
-                            d = (pcx - plcx) ** 2 + (pcy - plcy) ** 2
-                            if d < best_dist:
-                                best_dist = d
-                                best_bbox = pl_bbox
-                        if best_bbox is not None and best_dist < MATCH_THRESHOLD_SQ:
-                            pos_det['bbox'] = best_bbox
 
-                print(f"[OFFENSE SELECTION] Patched position bboxes with tight player-detector boxes")
-            except Exception as patch_err:
-                print(f"[OFFENSE SELECTION] Warning: could not patch player bboxes: {patch_err}")
+                        # Find nearest position detection by center distance
+                        best_dist, best_pos = float('inf'), None
+                        for pos in pos_dets:
+                            pos_bbox = pos.get('bbox', {})
+                            pcx = pos_bbox.get('center_x')
+                            pcy = pos_bbox.get('center_y')
+                            if pcx is None or pcy is None:
+                                continue
+                            dist = (plcx - pcx) ** 2 + (plcy - pcy) ** 2
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_pos = pos
 
+                        if best_pos is not None and best_dist < threshold_sq:
+                            merged.append({
+                                'class': best_pos['class'],
+                                'confidence': best_pos.get('confidence', 1.0),
+                                'bbox': pl_bbox,
+                            })
+
+                    if merged:
+                        frame_data['detections'] = merged
+
+                print(f"[OFFENSE SELECTION] Merged player-detector bboxes with position labels")
+            except Exception as merge_err:
+                print(f"[OFFENSE SELECTION] Warning: player bbox merge failed: {merge_err}")
+
+        # Cap wide receivers at 3 per frame, keeping the most split-wide (largest Y deviation).
+        # Extras are relabeled 'oline' so they still show but don't inflate the WR count.
+        WR_CLASSES = {'wide_receiver', 'tight_end'}
+        MAX_WR = 5
+        for frame_data in data.get('frames', []):
+            dets = frame_data.get('detections', [])
+            wr_dets = [d for d in dets if d.get('class', '').lower() in WR_CLASSES]
+            if len(wr_dets) > MAX_WR:
+                off_ys = [d['bbox']['center_y'] for d in dets
+                          if d.get('class', '').lower() not in ('defense', 'ref', 'yard_marker')
+                          and d['bbox'].get('center_y') is not None]
+                if off_ys:
+                    mean_y = sum(off_ys) / len(off_ys)
+                    wr_dets.sort(key=lambda d: abs(d['bbox']['center_y'] - mean_y), reverse=True)
+                    for d in wr_dets[MAX_WR:]:
+                        d['class'] = 'oline'
+
+        _ensure_qb_labeled(data)
         if hasattr(parent, 'custom_video'):
             parent.custom_video.set_detection_data(data)
             parent.custom_video.set_show_boxes(True)
