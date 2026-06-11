@@ -42,6 +42,8 @@ class VirtualFieldWidget(QWidget):
         self.offense_positions = None  # list of (nx, ny) yard coords for 11 offensive players
         self.qb_index = None
         self.field_image = None
+        self.offense_selection_mode = False
+        self.offense_label_points = []  # list of (center_x, center_y, class_name) in image space
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background-color: #2b2b2b; border: 1px solid #555555;")
 
@@ -239,16 +241,62 @@ class VirtualFieldWidget(QWidget):
                     normalized_pos = player.get('normalized_position', {})
                     x = normalized_pos.get('x', 0)
                     y = normalized_pos.get('y', 0)
-                    if defense_side is not None:
-                        px = float(x)
-                        los_x_val = float(np.median(xs))
-                        is_defense = (defense_side == 'above' and px > los_x_val) or \
-                                     (defense_side == 'below' and px < los_x_val)
-                        dot_color = POSITION_COLORS['defense'] if is_defense else POSITION_COLORS['player']
-                    else:
-                        dot_color = POSITION_COLORS['player']
-                    draw_dot(x, y, dot_color)
 
+                    # Get object label (e.g., 'qb', 'defense')
+                    object_label = player.get('object_label', 'player').lower()
+
+                    # Calculate field dimensions within the widget (accounting for aspect ratio)
+                    field_width = min(self.width(), int(self.height() * 100 / 53.33))
+                    field_height = min(self.height(), int(self.width() * 53.33 / 100))
+
+                    # Center the field in the widget
+                    field_x_offset = (self.width() - field_width) // 2
+                    field_y_offset = (self.height() - field_height) // 2
+
+                    # Map X: 0-100 yards to field_width pixels
+                    widget_x = int(field_x_offset + (x * field_width / 100))
+
+                    # Map Y: 0-53.33 yards to field_height pixels (flip Y so 0,0 is bottom)
+                    widget_y = int(field_y_offset + field_height - (y * field_height / 53.33))
+
+                    # Only draw if coordinates are within field bounds
+                    field_left = field_x_offset
+                    field_right = field_x_offset + field_width
+                    field_top = field_y_offset
+                    field_bottom = field_y_offset + field_height
+
+                    if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
+                        if getattr(self, 'offense_selection_mode', False):
+                            resolved_label = object_label
+                            label_pts = getattr(self, 'offense_label_points', [])
+                            if label_pts:
+                                orig_bbox = player.get('original_bbox', {})
+                                ocx = orig_bbox.get('center_x')
+                                ocy = orig_bbox.get('center_y')
+                                if ocx is not None and ocy is not None:
+                                    best_cls, _ = min(
+                                        ((cls, (ocx - px) ** 2 + (ocy - py) ** 2)
+                                         for px, py, cls in label_pts),
+                                        key=lambda t: t[1]
+                                    )
+                                    resolved_label = best_cls
+                            if resolved_label == 'defense':
+                                dot_color = POSITION_COLORS['defense']
+                            elif resolved_label == 'qb':
+                                dot_color = POSITION_COLORS['qb']
+                            elif resolved_label == 'wide_receiver':
+                                dot_color = POSITION_COLORS['wide_receiver']
+                            else:
+                                dot_color = POSITION_COLORS['oline']
+                        else:
+                            dot_color = POSITION_COLORS.get(object_label, POSITION_COLORS['player'])
+
+                        painter.setBrush(QBrush(dot_color))
+                        painter.setPen(QPen(QColor(255, 255, 255), 3))
+                        painter.drawEllipse(widget_x - 8, widget_y - 8, 16, 16)
+
+                        painter.setPen(QPen(QColor(255, 255, 255)))
+                        # painter.drawText(widget_x - 7, widget_y + 5, object_label.upper())
 
         
         # Draw frame number
@@ -571,25 +619,6 @@ def create_dock_title_bar(dock, parent):
     scoreboard_btn.clicked.connect(lambda: toggle_scoreboard(parent, scoreboard_btn))
     layout.addWidget(scoreboard_btn)
     
-    # Close button
-    close_btn = QPushButton("✕")
-    close_btn.setToolTip("Close Dock")
-    close_btn.setStyleSheet("""
-        QPushButton {
-            background-color: #f44336;
-            color: white;
-            border: none;
-            border-radius: 3px;
-            padding: 4px 8px;
-            font-size: 12px;
-        }
-        QPushButton:hover {
-            background-color: #d32f2f;
-        }
-    """)
-    close_btn.clicked.connect(dock.close)
-    layout.addWidget(close_btn)
-    
     title_bar.setLayout(layout)
     return title_bar
 
@@ -597,7 +626,7 @@ def create_virtual_field_dock(parent):
     """Create a simplified virtual field dock with static field image and player dots"""
     dock = QDockWidget("Virtual Field", parent)
     dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
+    dock.setFeatures(QDockWidget.DockWidgetMovable)
     
     # Set custom title bar with scoreboard toggle
     dock.setTitleBarWidget(create_dock_title_bar(dock, parent))
