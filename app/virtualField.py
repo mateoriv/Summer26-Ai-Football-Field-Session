@@ -199,7 +199,9 @@ class VirtualFieldWidget(QWidget):
                                 dot_color = POSITION_COLORS['defense']
                             elif resolved_label == 'qb':
                                 dot_color = POSITION_COLORS['qb']
-                            elif resolved_label == 'wide_receiver':
+                            elif resolved_label == 'running_back':
+                                dot_color = POSITION_COLORS['running_back']
+                            elif resolved_label in ('wide_receiver', 'tight_end'):
                                 dot_color = POSITION_COLORS['wide_receiver']
                             else:
                                 dot_color = POSITION_COLORS['oline']
