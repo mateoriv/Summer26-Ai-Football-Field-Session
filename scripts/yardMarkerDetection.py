@@ -26,50 +26,47 @@ YARD_MARKER_CLASSES = {
     14: 'nr1', 15: 'nr2', 16: 'nr3', 17: 'nr4'
 }
 
+FRAME_STRIDE = 3  # process every Nth frame (~3x speedup)
+BATCH_SIZE = 8    # frames per YOLO inference call
+
 def yardMarkerDetection(video_path, model_path="yolo_models/yardMark.pt", confidence_threshold=0.7):
     """
     Detect yard markers in video frames using a trained YOLO model
-    
+
     Args:
         video_path: Path to input video file
         model_path: Path to YOLO model file
         confidence_threshold: Minimum confidence for detections
-    
+
     Returns:
         Dictionary with detection results
     """
     print(f"[INFO] Starting yard marker detection for: {video_path}")
-    
-    # Check if video file exists
+
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
-    
-    # Check if model file exists
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
-    
-    # Load YOLO model
+
     print(f"[INFO] Loading YOLO model: {model_path}")
     try:
         model = YOLO(model_path)
         print("[SUCCESS] Model loaded successfully")
     except Exception as e:
         raise RuntimeError(f"Failed to load YOLO model: {e}")
-    
-    # Open video
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
-    
-    # Get video properties
+
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
+
     print(f"[INFO] Video info: {total_frames} frames, {fps} FPS, {width}x{height}")
-    
-    # Initialize results
+    print(f"[INFO] Frame stride: {FRAME_STRIDE} (processing ~{total_frames // FRAME_STRIDE} frames)", flush=True)
+
     results = {
         "video_info": {
             "path": video_path,
@@ -85,103 +82,93 @@ def yardMarkerDetection(video_path, model_path="yolo_models/yardMark.pt", confid
         },
         "frames": []
     }
-    
-    frame_number = 0
+
     detections_count = 0
-    
+
+    def flush_batch(batch_frames, batch_frame_numbers):
+        nonlocal detections_count
+        try:
+            yolo_results = model(batch_frames, conf=confidence_threshold, verbose=False)
+        except Exception as e:
+            print(f"[WARNING] Batch inference error: {e}")
+            for fn in batch_frame_numbers:
+                results["frames"].append({"frame_number": fn, "timestamp": fn / fps, "detections": []})
+            return
+
+        for fn, r in zip(batch_frame_numbers, yolo_results):
+            frame_detections = []
+            if r.boxes is not None and len(r.boxes) > 0:
+                boxes = r.boxes.xyxy.cpu().numpy()
+                confidences = r.boxes.conf.cpu().numpy()
+                class_ids = r.boxes.cls.cpu().numpy().astype(int)
+
+                for box, conf, class_id in zip(boxes, confidences, class_ids):
+                    class_name = YARD_MARKER_CLASSES.get(class_id, f"unknown_{class_id}")
+                    x1, y1, x2, y2 = box
+                    w = x2 - x1
+                    h = y2 - y1
+
+                    frame_detections.append({
+                        "class": class_name,
+                        "class_id": int(class_id),
+                        "confidence": float(conf),
+                        "bbox": {
+                            "x1": float(x1), "y1": float(y1),
+                            "x2": float(x2), "y2": float(y2),
+                            "width": float(w), "height": float(h),
+                            "center_x": float((x1 + x2) / 2),
+                            "center_y": float((y1 + y2) / 2)
+                        }
+                    })
+                    detections_count += 1
+
+            results["frames"].append({
+                "frame_number": fn,
+                "timestamp": fn / fps,
+                "detections": frame_detections
+            })
+
     print("[INFO] Processing frames...")
-    
+    frame_number = 0
+    batch_frames = []
+    batch_frame_numbers = []
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        
-        # Run YOLO detection
-        try:
-            yolo_results = model(frame, conf=confidence_threshold, verbose=False)
-            
-            # Process detections
-            frame_detections = []
-            if yolo_results and len(yolo_results) > 0:
-                result = yolo_results[0]  # Get first (and only) result
-                
-                if result.boxes is not None and len(result.boxes) > 0:
-                    boxes = result.boxes.xyxy.cpu().numpy()  # Get bounding boxes
-                    confidences = result.boxes.conf.cpu().numpy()  # Get confidences
-                    class_ids = result.boxes.cls.cpu().numpy().astype(int)  # Get class IDs
-                    
-                    for i, (box, conf, class_id) in enumerate(zip(boxes, confidences, class_ids)):
-                        # Get class name
-                        class_name = YARD_MARKER_CLASSES.get(class_id, f"unknown_{class_id}")
-                        
-                        # Extract bounding box coordinates
-                        x1, y1, x2, y2 = box
-                        width = x2 - x1
-                        height = y2 - y1
-                        center_x = (x1 + x2) / 2
-                        center_y = (y1 + y2) / 2
-                        
-                        detection = {
-                            "class": class_name,
-                            "class_id": int(class_id),
-                            "confidence": float(conf),
-                            "bbox": {
-                                "x1": float(x1),
-                                "y1": float(y1),
-                                "x2": float(x2),
-                                "y2": float(y2),
-                                "width": float(width),
-                                "height": float(height),
-                                "center_x": float(center_x),
-                                "center_y": float(center_y)
-                            }
-                        }
-                        
-                        frame_detections.append(detection)
-                        detections_count += 1
-            
-            # Store frame results
-            frame_result = {
-                "frame_number": frame_number,
-                "timestamp": frame_number / fps,
-                "detections": frame_detections
-            }
-            
-            results["frames"].append(frame_result)
-            
-            # Progress update
-            if frame_number % 5 == 0:  # Update every 30 frames
-                print(f"Processed frame {frame_number}/{total_frames}", flush=True)
-            
-            frame_number += 1
-            
-        except Exception as e:
-            print(f"[WARNING] Error processing frame {frame_number}: {e}")
-            # Add empty frame result
-            frame_result = {
-                "frame_number": frame_number,
-                "timestamp": frame_number / fps,
-                "detections": []
-            }
-            results["frames"].append(frame_result)
-            frame_number += 1
-            continue
-    
-    # Clean up
+
+        if frame_number % FRAME_STRIDE == 0:
+            batch_frames.append(frame)
+            batch_frame_numbers.append(frame_number)
+
+            if len(batch_frames) >= BATCH_SIZE:
+                flush_batch(batch_frames, batch_frame_numbers)
+                batch_frames = []
+                batch_frame_numbers = []
+
+        if frame_number % 10 == 0:
+            print(f"Processed frame {frame_number}/{total_frames}", flush=True)
+
+        frame_number += 1
+
+    # flush remaining frames
+    if batch_frames:
+        flush_batch(batch_frames, batch_frame_numbers)
+
     cap.release()
-    
-    # Add summary statistics
+
     results["summary"] = {
         "total_frames_processed": frame_number,
         "total_detections": detections_count,
         "frames_with_detections": len([f for f in results["frames"] if f["detections"]]),
-        "average_detections_per_frame": detections_count / frame_number if frame_number > 0 else 0
+        "average_detections_per_frame": detections_count / len(results["frames"]) if results["frames"] else 0
     }
-    
+
     print(f"[SUCCESS] Yard marker detection completed!")
     print(f"[INFO] Summary: {detections_count} total detections across {frame_number} frames")
     print(f"[INFO] Frames with detections: {results['summary']['frames_with_detections']}")
-    
+
     return results
 
 def save_results(results, output_path):
