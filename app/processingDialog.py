@@ -13,6 +13,7 @@ from PySide6.QtGui import QFont, QIcon, QTextCursor
 from video import load_snap_detection_data
 import subprocess
 import os
+import json
 import sys
 import json
 import time
@@ -211,6 +212,14 @@ class ProcessingWorker(QThread):
             prerequisites_exist = os.path.exists(homography_file) and os.path.exists(snap_file)
             if not prerequisites_exist:
                 return False
+            # If snap detection found no snaps, static process can never run — treat as done
+            try:
+                with open(snap_file, 'r') as f:
+                    snap_json = json.load(f)
+                if not snap_json.get('snaps'):
+                    return True
+            except Exception:
+                pass
             # If prerequisites exist, check if CSV has been augmented
             return self.is_csv_row_augmented()
         return False
