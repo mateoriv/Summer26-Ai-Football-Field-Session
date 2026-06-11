@@ -337,6 +337,8 @@ class CustomVideoWidget(QWidget):
                 box_color = POSITION_COLORS['defense']             # gray
             elif class_name == 'qb':
                 box_color = POSITION_COLORS['qb']                  # yellow
+            elif class_name == 'running_back':
+                box_color = POSITION_COLORS['running_back']        # orange
             elif class_name in ('wide_receiver', 'tight_end'):
                 box_color = POSITION_COLORS['wide_receiver']       # cyan
             else:
@@ -1383,6 +1385,88 @@ def _ensure_qb_labeled(positions_data):
               f"({qb_det['bbox']['center_x']:.0f}, {qb_det['bbox']['center_y']:.0f})")
 
 
+def _label_running_backs(positions_data):
+    """Label backfield players near the QB as running_back (orange).
+
+    Operates after _ensure_qb_labeled so QB is always present.
+    Candidates must be interior (not split-wide) and within 200 px of the QB.
+    Capped at 2 RBs per frame.
+    """
+    RB_MAX_DIST_PX = 200
+    MAX_RB = 1
+    WR_CLASSES = {'wide_receiver', 'tight_end'}
+
+    for frame_data in positions_data.get('frames', []):
+        dets = frame_data.get('detections', [])
+
+        qb = next((d for d in dets
+                   if d.get('class', '').lower() == 'qb'
+                   and d.get('bbox', {}).get('center_x') is not None), None)
+        if qb is None:
+            continue
+
+        off_dets = [d for d in dets
+                    if d.get('class', '').lower() not in ('defense', 'ref', 'yard_marker', *WR_CLASSES)
+                    and 'bbox' in d
+                    and d['bbox'].get('center_x') is not None
+                    and d['bbox'].get('center_y') is not None]
+
+        if len(off_dets) < 3:
+            continue
+
+        # Exclude split-wide outliers from RB candidacy
+        off_ys = [d['bbox']['center_y'] for d in off_dets]
+        mean_y = sum(off_ys) / len(off_ys)
+        std_y = (sum((y - mean_y) ** 2 for y in off_ys) / len(off_ys)) ** 0.5
+        interior = [d for d in off_dets
+                    if d is not qb
+                    and (std_y == 0 or abs(d['bbox']['center_y'] - mean_y) <= 1.5 * std_y)]
+
+        qb_cx = qb['bbox']['center_x']
+        qb_cy = qb['bbox']['center_y']
+        threshold_sq = RB_MAX_DIST_PX ** 2
+
+        candidates = sorted(
+            [d for d in interior
+             if (d['bbox']['center_x'] - qb_cx) ** 2 + (d['bbox']['center_y'] - qb_cy) ** 2 <= threshold_sq],
+            key=lambda d: (d['bbox']['center_x'] - qb_cx) ** 2 + (d['bbox']['center_y'] - qb_cy) ** 2
+        )
+
+        for d in candidates[:MAX_RB]:
+            d['class'] = 'running_back'
+            print(f"[RB] Labeled running_back at "
+                  f"({d['bbox']['center_x']:.0f}, {d['bbox']['center_y']:.0f})")
+
+
+def _resolve_qb_rb_by_height(positions_data):
+    """Swap QB/RB labels if the RB has a taller bbox than the QB.
+
+    The QB is typically more upright at the snap; the RB tends to crouch lower.
+    A 10% tolerance prevents swapping when heights are nearly equal.
+    """
+    HEIGHT_TOLERANCE = 0.10
+
+    for frame_data in positions_data.get('frames', []):
+        dets = frame_data.get('detections', [])
+
+        qb = next((d for d in dets if d.get('class', '').lower() == 'qb'), None)
+        rb = next((d for d in dets if d.get('class', '').lower() == 'running_back'), None)
+
+        if qb is None or rb is None:
+            continue
+
+        qb_h = qb.get('bbox', {}).get('height', 0)
+        rb_h = rb.get('bbox', {}).get('height', 0)
+
+        if qb_h <= 0 or rb_h <= 0:
+            continue
+
+        if rb_h > qb_h * (1 + HEIGHT_TOLERANCE):
+            qb['class'] = 'running_back'
+            rb['class'] = 'qb'
+            print(f"[QB/RB] Swapped — RB bbox taller ({rb_h:.0f}px) than QB ({qb_h:.0f}px)")
+
+
 def _load_position_data_for_offense_mode(parent):
     """Swap the video widget's detection data to the position-labeled JSON.
 
@@ -1494,6 +1578,8 @@ def _load_position_data_for_offense_mode(parent):
                         d['class'] = 'oline'
 
         _ensure_qb_labeled(data)
+        _label_running_backs(data)
+        _resolve_qb_rb_by_height(data)
         if hasattr(parent, 'custom_video'):
             parent.custom_video.set_detection_data(data)
             parent.custom_video.set_show_boxes(True)
