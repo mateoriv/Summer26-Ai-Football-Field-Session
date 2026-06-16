@@ -416,6 +416,127 @@ def _predict_play(features_22, model_dir):
     return label, confidence
 
 
+def _determine_backfield_type(video_name, folder_name, base_cache_dir):
+    """
+    Returns 'GUN', 'UNDER CENTER', or None if undetermined.
+
+    Computes QB depth relative to the oline in normalized field yards.
+    GUN threshold: QB is >= 2 yards behind the oline mean.
+    """
+    snap_path = os.path.join(base_cache_dir, folder_name, "snap_detection",
+                             f"{video_name}_snap_detection.json")
+    positions_path = os.path.join(base_cache_dir, folder_name, "positions",
+                                  f"{video_name}_position.json")
+    homography_path = os.path.join(base_cache_dir, folder_name, "homography",
+                                   f"{video_name}_normalized_positions.json")
+
+    snap_frame = get_snap_frame(snap_path)
+    if snap_frame is None:
+        return None
+
+    position_detections, image_width = get_positions_at_snap(positions_path, snap_frame)
+    if not position_detections:
+        return None
+
+    offense_side = get_offense_side_from_positions(position_detections, image_width)
+    if offense_side is None:
+        return None
+
+    normalized = get_normalized_positions_at_snap(homography_path, snap_frame)
+    if not normalized:
+        return None
+
+    # Build (ocx, ocy, nx) lookup from homography data
+    hom_points = []
+    for det in normalized:
+        npos = det.get("normalized_position") or {}
+        bbox = det.get("original_bbox") or {}
+        nx = npos.get("x")
+        ocx = bbox.get("center_x")
+        ocy = bbox.get("center_y")
+        if nx is not None and ocx is not None and ocy is not None:
+            hom_points.append((float(ocx), float(ocy), float(nx)))
+
+    if not hom_points:
+        return None
+
+    def _nearest_nx(cx, cy):
+        best_nx, best_dist = None, float('inf')
+        for hcx, hcy, hnx in hom_points:
+            d = (cx - hcx) ** 2 + (cy - hcy) ** 2
+            if d < best_dist:
+                best_dist = d
+                best_nx = hnx
+        return best_nx
+
+    # Strip refs; work with offense and defense only
+    dets = [d for d in position_detections if _normalize_class(d.get("class")) != "ref"]
+
+    # Find QB — use labeled 'qb' first, then centered-backfield fallback.
+    # If multiple QBs are labeled, keep only the one closest to the snap center (oline mean Y).
+    qb_dets = [d for d in dets if _normalize_class(d.get("class")) == "qb"]
+
+    if len(qb_dets) > 1:
+        oline_fb = [d for d in dets if _normalize_class(d.get("class")) == "oline"
+                    and d.get("bbox", {}).get("center_y") is not None]
+        cy = (sum(d["bbox"]["center_y"] for d in oline_fb) / len(oline_fb)
+              if oline_fb else
+              sum(d["bbox"]["center_y"] for d in qb_dets) / len(qb_dets))
+        qb_dets = [min(qb_dets, key=lambda d: abs(d["bbox"]["center_y"] - cy))]
+
+    if not qb_dets:
+        off_dets = [d for d in dets if _normalize_class(d.get("class")) != "defense"
+                    and d.get("bbox", {}).get("center_x") is not None]
+        if not off_dets:
+            return None
+        oline_fb = [d for d in off_dets if _normalize_class(d.get("class")) == "oline"]
+        if oline_fb:
+            center_y = sum(d["bbox"]["center_y"] for d in oline_fb) / len(oline_fb)
+        else:
+            off_ys = [d["bbox"]["center_y"] for d in off_dets]
+            center_y = sum(off_ys) / len(off_ys)
+        backfield = [d for d in off_dets
+                     if _normalize_class(d.get("class")) not in ("wide_receiver", "tight_end", "oline")]
+        if not backfield:
+            off_ys = [d["bbox"]["center_y"] for d in off_dets]
+            mean_y = sum(off_ys) / len(off_ys)
+            std_y = (sum((y - mean_y) ** 2 for y in off_ys) / len(off_ys)) ** 0.5
+            backfield = [
+                d for d in off_dets
+                if _normalize_class(d.get("class")) not in ("wide_receiver", "tight_end")
+                and (std_y == 0 or abs(d["bbox"]["center_y"] - mean_y) <= 1.5 * std_y)
+            ] or off_dets
+        qb_dets = [min(backfield, key=lambda d: abs(d["bbox"]["center_y"] - center_y))]
+
+    qb_bbox = qb_dets[0].get("bbox", {})
+    qb_nx = _nearest_nx(float(qb_bbox.get("center_x", 0)), float(qb_bbox.get("center_y", 0)))
+    if qb_nx is None:
+        return None
+
+    # Find oline detections and get their mean normalized x
+    oline_dets = [d for d in dets if _normalize_class(d.get("class")) == "oline"
+                  and d.get("bbox", {}).get("center_x") is not None]
+    if not oline_dets:
+        return None
+
+    oline_nxs = [_nearest_nx(float(d["bbox"]["center_x"]), float(d["bbox"]["center_y"]))
+                 for d in oline_dets]
+    oline_nxs = [v for v in oline_nxs if v is not None]
+    if not oline_nxs:
+        return None
+
+    oline_mean_nx = sum(oline_nxs) / len(oline_nxs)
+
+    # Positive depth means QB is further behind the LOS than the oline
+    if offense_side == "left":
+        depth = oline_mean_nx - qb_nx   # oline closer to LOS = larger nx for left offense
+    else:
+        depth = qb_nx - oline_mean_nx   # oline closer to LOS = smaller nx for right offense
+
+    print(f"[INFO] Backfield depth: {depth:.2f} yards (offense_side={offense_side})")
+    return "GUN" if depth >= .3 else "UNDER CENTER"
+
+
 def load_data(file_path):
     """
     Load JSON data from a file.
@@ -781,21 +902,26 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
                 if median_y > top_hash:
                     hash_side = "L"
                 elif median_y < bottom_hash:
-                    hash_side = "M"
-                else:
                     hash_side = "R"
+                else:
+                    hash_side = "M"
             else:
                 if median_y > top_hash:
                     hash_side = "R"
                 elif median_y < bottom_hash:
-                    hash_side = "M"
-                else:
                     hash_side = "L"
+                else:
+                    hash_side = "M"
          
             df.at[video_row_index, 'HASH'] = hash_side
         else:
             print(f"[WARNING] No y positions found in detections, skipping hash side update")
 
+        # Determine backfield type (GUN vs UNDER CENTER)
+        backfield = _determine_backfield_type(video_name, folder_name, base_cache_dir)
+        if backfield is not None:
+            df.at[video_row_index, 'BACKFIELD'] = backfield
+            print(f"[INFO] Backfield type: {backfield}")
 
         # Save the updated CSV
         df.to_csv(csv_file_path, index=False)

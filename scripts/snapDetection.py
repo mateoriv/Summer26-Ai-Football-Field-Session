@@ -263,25 +263,26 @@ def detect_snaps(
     # Smooth mover counts the same way for stability
     smoothed_movers = np.convolve(mover_counts.astype(np.float32), kernel, mode="same")
 
-    # Eligibility mask: frames below the player threshold were forced to
-    # velocity 0 in compute_velocity. On long clips that are ~half wide/huddle
-    # shots, those zeros dominate and drag the percentiles toward 0 --
-    # calm_threshold becomes exactly 0, the calm gate `pre_mean < 0` can never
-    # pass, and the detector finds 0 snaps. Compute thresholds over the eligible
-    # (enough-players) frames only so they reflect real motion.
-    if player_counts is not None and len(player_counts) == n:
-        eligible_mask = np.asarray(player_counts) >= min_players_per_frame
-    else:
-        eligible_mask = np.ones(n, dtype=bool)
-    valid_smoothed = smoothed[eligible_mask]
-    if len(valid_smoothed) < 5:
-        valid_smoothed = smoothed
-
-    # Adaptive thresholds (over eligible frames only)
-    calm_threshold  = np.percentile(valid_smoothed, 30)
-    motion_threshold = np.percentile(valid_smoothed, 70)
     accel = np.gradient(np.gradient(smoothed))
-    accel_threshold = np.percentile(np.abs(accel), 80)
+
+    # Build eligibility mask before computing thresholds — ineligible frames have
+    # velocity clamped to 0, which skews percentiles when many frames lack players.
+    if player_counts is not None and len(player_counts) == n:
+        enough_players = np.asarray(player_counts) >= min_players_per_frame
+    else:
+        enough_players = np.ones(n, dtype=bool)
+
+    # Compute adaptive thresholds only over eligible frames to avoid 0-padded
+    # ineligible frames pulling calm_threshold down to 0.
+    eligible_smoothed = smoothed[enough_players]
+    if len(eligible_smoothed) < 10:
+        eligible_smoothed = smoothed  # safety fallback when very few eligible frames
+
+    calm_threshold   = max(float(np.percentile(eligible_smoothed, 30)), 0.05)
+    motion_threshold = float(np.percentile(eligible_smoothed, 70))
+
+    eligible_accel = np.abs(accel)[enough_players] if enough_players.sum() > 10 else np.abs(accel)
+    accel_threshold = float(np.percentile(eligible_accel, 80))
 
     print(
         f"[INFO] Thresholds: calm={calm_threshold:.2f}, "
@@ -299,12 +300,6 @@ def detect_snaps(
 
     # Max frame cap
     max_frame = int(n * max_snap_fraction)
-
-    # Build a boolean mask: True where the frame has enough players to be eligible
-    if player_counts is not None and len(player_counts) == n:
-        enough_players = player_counts >= min_players_per_frame
-    else:
-        enough_players = np.ones(n, dtype=bool)
 
     candidates = []
 
@@ -349,10 +344,10 @@ def detect_snaps(
                 + (future_avg - pre_mean)                  # reward big velocity jump
                 + float(smoothed_movers[i]) * 0.3         # reward many movers
             )
-            frame = int(i) - 2*fps
+            frame = max(0, int(i) - int(2*fps))
             candidates.append({
                 "frame": int(frame),
-                "time": round(frame/ fps, 3),
+                "time": round(frame / fps, 3),
                 "confidence": float(confidence),
             })
 
@@ -384,6 +379,25 @@ def detect_snaps(
                     "time": round(frame / fps, 3),
                     "confidence": float(confidence),
                 })
+
+    if not candidates:
+        # Last-resort: pick the highest-smoothed-velocity eligible frame and back up 2s.
+        # Confidence 0.1 signals low certainty so downstream code can flag it.
+        print("[WARNING] Using last-resort fallback: highest-velocity eligible frame.")
+        best_frame, best_vel = None, -1.0
+        for i in range(start, max_frame - look_ahead):
+            if not enough_players[i]:
+                continue
+            if smoothed[i] > best_vel:
+                best_vel = smoothed[i]
+                best_frame = i
+        if best_frame is not None:
+            frame = max(0, best_frame - int(2 * fps))
+            candidates.append({
+                "frame": int(frame),
+                "time": round(frame / fps, 3),
+                "confidence": 0.1,
+            })
 
     if not candidates:
         return []

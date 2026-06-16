@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QFont
 import pandas as pd
 import os
+import re
 
 class CSVTableModel(QAbstractTableModel):
     def __init__(self, data=None, parent=None):
@@ -11,6 +12,7 @@ class CSVTableModel(QAbstractTableModel):
         self.video_clip_column = None
         self.video_time_column = None
         self.empty_message = "No data available."
+        self.has_unsaved_changes = False
 
     def rowCount(self, parent=QModelIndex()):
         if self._data.empty:
@@ -22,10 +24,30 @@ class CSVTableModel(QAbstractTableModel):
             return 1  # Show one column for empty message
         return len(self._data.columns)
 
+    def flags(self, index):
+        base = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        if not self._data.empty:
+            col = self._data.columns[index.column()].upper()
+            if col not in ('CLIP NAME',):
+                return base | Qt.ItemIsEditable
+        return base
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if role == Qt.EditRole and not self._data.empty:
+            self._data.iloc[index.row(), index.column()] = value
+            self.dataChanged.emit(index, index, [role])
+            self.has_unsaved_changes = True
+            return True
+        return False
+
+    def save_to_csv(self, path):
+        self._data.to_csv(path, index=False)
+        self.has_unsaved_changes = False
+
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
-        
+
         if role == Qt.DisplayRole:
             if self._data.empty:
                 # Show empty message in first cell
@@ -33,7 +55,7 @@ class CSVTableModel(QAbstractTableModel):
                     return self.empty_message
                 return None
             return str(self._data.iloc[index.row(), index.column()])
-        
+
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
@@ -47,16 +69,28 @@ class CSVTableModel(QAbstractTableModel):
         try:
             self.beginResetModel()
             self._data = pd.read_csv(csv_path)
-            
+
             # Try to auto-detect video clip and time columns
+            clip_col = None
             for col in self._data.columns:
                 col_lower = col.lower()
                 if 'clip' in col_lower or 'video' in col_lower:
                     self.video_clip_column = col
+                    clip_col = col
                 if 'time' in col_lower or 'timestamp' in col_lower:
                     self.video_time_column = col
-            
+
+            # Sort rows by the clip name column using natural/numeric order
+            if clip_col and not self._data.empty:
+                def _nat_key(val):
+                    return [int(c) if c.isdigit() else c.lower()
+                            for c in re.split(r'(\d+)', str(val))]
+                self._data = self._data.iloc[
+                    self._data[clip_col].map(_nat_key).argsort()
+                ].reset_index(drop=True)
+
             self.endResetModel()
+            self.has_unsaved_changes = False
             return True
         except Exception as e:
             print(f"Error loading CSV: {e}")
@@ -90,8 +124,8 @@ class CSVTableModel(QAbstractTableModel):
 def create_data_sheet_dock(parent):
     dock = QDockWidget("Data Sheet", parent)
     dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
-    
+    dock.setFeatures(QDockWidget.DockWidgetMovable)
+
     # Set custom title bar with process button
     dock.setTitleBarWidget(create_data_sheet_title_bar(dock, parent))
 
@@ -115,6 +149,14 @@ def create_data_sheet_dock(parent):
     # Connect selection change to play corresponding video
     parent.tableView.selectionModel().selectionChanged.connect(
         lambda: on_row_selected(parent)
+    )
+
+    # Enable Save button when edits are made, disable when fresh data loads
+    parent.csv_model.dataChanged.connect(
+        lambda *_: parent.save_stats_btn.setEnabled(parent.csv_model.has_unsaved_changes)
+    )
+    parent.csv_model.modelReset.connect(
+        lambda: parent.save_stats_btn.setEnabled(False)
     )
     
     layout.addWidget(parent.tableView)
@@ -309,6 +351,36 @@ def create_data_sheet_title_bar(dock, parent):
     right_spacer.setFixedWidth(60)  # Space for buttons on the right
     layout.addWidget(right_spacer)
     
+    # Save stats button
+    save_stats_btn = QPushButton("Save")
+    save_stats_btn.setFixedSize(50, 20)
+    save_stats_btn.setEnabled(False)
+    save_stats_btn.setToolTip("Save stat edits to CSV")
+    save_stats_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #28a745;
+            border: none;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+            font-size: 10px;
+        }
+        QPushButton:hover {
+            background-color: #218838;
+        }
+        QPushButton:pressed {
+            background-color: #1e7e34;
+        }
+        QPushButton:disabled {
+            background-color: #444444;
+            color: #888888;
+        }
+    """)
+    save_stats_btn.clicked.connect(lambda: save_stats_edits(parent))
+    parent.save_stats_btn = save_stats_btn
+    layout.addWidget(save_stats_btn)
+
     # Process button
     process_btn = QPushButton("Process")
     process_btn.setFixedSize(60, 20)
@@ -356,13 +428,6 @@ def create_data_sheet_title_bar(dock, parent):
     batch_process_btn.setToolTip("Batch Process All Videos in Folder")
     batch_process_btn.clicked.connect(lambda: batch_process_videos(parent))
     layout.addWidget(batch_process_btn)
-    
-    # Close button (X)
-    close_btn = QPushButton("✕")
-    close_btn.setFixedSize(20, 20)
-    close_btn.setToolTip("Close")
-    close_btn.clicked.connect(dock.close)
-    layout.addWidget(close_btn)
     
     title_bar.setLayout(layout)
     return title_bar
@@ -424,6 +489,19 @@ def batch_process_videos(parent):
     from batchProcessingDialog import BatchProcessingDialog
     dialog = BatchProcessingDialog(parent)
     dialog.exec()
+
+def save_stats_edits(parent):
+    """Save manually edited stats back to the CSV file on disk"""
+    if not hasattr(parent, 'current_csv_path') or not parent.current_csv_path:
+        QMessageBox.warning(parent, "No File", "No CSV file is currently loaded.")
+        return
+    try:
+        parent.csv_model.save_to_csv(parent.current_csv_path)
+        parent.save_stats_btn.setEnabled(False)
+        print(f"Stats saved to: {parent.current_csv_path}")
+    except Exception as e:
+        QMessageBox.critical(parent, "Save Failed", f"Could not save CSV:\n{str(e)}")
+        print(f"Error saving stats: {str(e)}")
 
 def export_csv_to_folder(parent):
     """Export the current CSV data to a selected folder"""

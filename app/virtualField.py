@@ -48,6 +48,8 @@ class VirtualFieldWidget(QWidget):
         # pushed by video.set_formation_info_for_virtual_field.
         self.formation_name = ""
         self.formation_confidence = None
+        self.offense_selection_mode = False
+        self.offense_label_points = []  # list of (center_x, center_y, class_name) in image space
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background-color: #2b2b2b; border: 1px solid #555555;")
         
@@ -464,20 +466,46 @@ class VirtualFieldWidget(QWidget):
                     field_bottom = field_y_offset + field_height
                     
                     if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
-                        # Stable whole-clip team from assignTeamColors (jersey
-                        # colour, written into normalized_positions) -- trusted
-                        # only when the split was flagged reliable. QB shown gold
-                        # where the role detector saw it (snap window).
-                        team = player.get('team') if getattr(self, '_team_reliable', False) else None
                         role = self._role_for_dot(self.current_frame, player.get('original_bbox'))
-                        if role == 'qb':
-                            dot_color = QB_GOLD
-                        elif team == 'offense':
-                            dot_color = OFFENSE
-                        elif team == 'defense':
-                            dot_color = DEFENSE
+                        if getattr(self, 'offense_selection_mode', False):
+                            # Offense-selection mode: color dots by the role
+                            # class of the nearest labeled offense point.
+                            resolved_label = object_label
+                            label_pts = getattr(self, 'offense_label_points', [])
+                            if label_pts:
+                                orig_bbox = player.get('original_bbox', {})
+                                ocx = orig_bbox.get('center_x')
+                                ocy = orig_bbox.get('center_y')
+                                if ocx is not None and ocy is not None:
+                                    best_cls, _ = min(
+                                        ((cls, (ocx - px) ** 2 + (ocy - py) ** 2)
+                                         for px, py, cls in label_pts),
+                                        key=lambda t: t[1]
+                                    )
+                                    resolved_label = best_cls
+                            if resolved_label == 'defense':
+                                dot_color = POSITION_COLORS['defense']
+                            elif resolved_label == 'qb':
+                                dot_color = POSITION_COLORS['qb']
+                            elif resolved_label == 'wide_receiver':
+                                dot_color = POSITION_COLORS['wide_receiver']
+                            else:
+                                dot_color = POSITION_COLORS['oline']
                         else:
-                            dot_color = team_color(role or object_label)
+                            # Stable whole-clip team from assignTeamColors (jersey
+                            # colour, written into normalized_positions) -- trusted
+                            # only when the split was flagged reliable. QB shown gold
+                            # where the role detector saw it (snap window).
+                            team = player.get('team') if getattr(self, '_team_reliable', False) else None
+                            if role == 'qb':
+                                dot_color = QB_GOLD
+                            elif team == 'offense':
+                                dot_color = OFFENSE
+                            elif team == 'defense':
+                                dot_color = DEFENSE
+                            else:
+                                dot_color = team_color(role or object_label)
+
 
                         # Draw player dot - make it more visible
                         painter.setBrush(QBrush(dot_color))
@@ -820,25 +848,6 @@ def create_dock_title_bar(dock, parent):
     scoreboard_btn.clicked.connect(lambda: toggle_scoreboard(parent, scoreboard_btn))
     layout.addWidget(scoreboard_btn)
     
-    # Close button
-    close_btn = QPushButton("✕")
-    close_btn.setToolTip("Close Dock")
-    close_btn.setStyleSheet("""
-        QPushButton {
-            background-color: #f44336;
-            color: white;
-            border: none;
-            border-radius: 3px;
-            padding: 4px 8px;
-            font-size: 12px;
-        }
-        QPushButton:hover {
-            background-color: #d32f2f;
-        }
-    """)
-    close_btn.clicked.connect(dock.close)
-    layout.addWidget(close_btn)
-    
     title_bar.setLayout(layout)
     return title_bar
 
@@ -846,7 +855,7 @@ def create_virtual_field_dock(parent):
     """Create a simplified virtual field dock with static field image and player dots"""
     dock = QDockWidget("Virtual Field", parent)
     dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-    dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
+    dock.setFeatures(QDockWidget.DockWidgetMovable)
     
     # Set custom title bar with scoreboard toggle
     dock.setTitleBarWidget(create_dock_title_bar(dock, parent))
