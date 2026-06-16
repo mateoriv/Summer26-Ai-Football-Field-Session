@@ -61,6 +61,19 @@ def get_snap_frame(snap_detection_path):
     return snaps[0].get("frame")
 
 
+def get_first_available_frame(homography_path):
+    """Return the numerically first frame key from homography normalized_positions, or None."""
+    if not os.path.exists(homography_path):
+        return None
+    with open(homography_path, "r") as f:
+        data = json.load(f)
+    frames = data.get("normalized_positions") or {}
+    if not frames:
+        return None
+    frame_nums = sorted(int(k) for k in frames.keys() if k.lstrip('-').isdigit())
+    return frame_nums[0] if frame_nums else None
+
+
 def get_positions_at_snap(positions_path, snap_frame):
     """Load position JSON; return (detections at snap frame, image width)."""
     if not os.path.exists(positions_path):
@@ -152,6 +165,45 @@ def take_first_11_on_side(detections, side):
     return points
 
 
+def identify_qb(points_11):
+    """
+    Identify the QB index among 11 offensive players assuming shotgun formation.
+
+    The QB is the backfield player (behind the LOS) whose lateral position (y)
+    is closest to the center of the offensive line.
+
+    Args:
+        points_11: list of [nx, ny, ox, oy] for the 11 offensive players,
+                   normalized so offense always attacks from the left (increasing x).
+
+    Returns:
+        Index into points_11 of the QB, or None if no backfield player is found.
+    """
+    if not points_11:
+        return None
+
+    xs = [p[0] for p in points_11]
+    los_x = min(xs)
+
+    # Players within 2 yards of the LOS are considered linemen
+    los_threshold = los_x + 2.0
+    linemen = [p for p in points_11 if p[0] <= los_threshold]
+    backfield = [(i, p) for i, p in enumerate(points_11) if p[0] > los_threshold]
+
+    if not backfield:
+        return None
+
+    # Lateral center of the offensive line
+    if linemen:
+        line_center_y = float(np.median([p[1] for p in linemen]))
+    else:
+        line_center_y = float(np.median([p[1] for p in points_11]))
+
+    # QB is the backfield player laterally closest to the line center
+    qb_idx, _ = min(backfield, key=lambda ip: abs(ip[1][1] - line_center_y))
+    return qb_idx
+
+
 def get_offense_points_for_video(video_name, folder_name, base_cache_dir):
     """
     Same pipeline as build_offense_positions_dataset.py, but for one clip.
@@ -163,7 +215,10 @@ def get_offense_points_for_video(video_name, folder_name, base_cache_dir):
 
     snap_frame = get_snap_frame(snap_path)
     if snap_frame is None:
-        return None, "No snap frame", None
+        snap_frame = get_first_available_frame(homography_path)
+        if snap_frame is None:
+            return None, "No snap frame and no homography frames available", None
+        print(f"[INFO] No snap frame detected; falling back to first available homography frame {snap_frame}")
 
     position_detections, image_width = get_positions_at_snap(positions_path, snap_frame)
     offense_side = get_offense_side_from_positions(position_detections, image_width)
@@ -432,7 +487,10 @@ def _determine_backfield_type(video_name, folder_name, base_cache_dir):
 
     snap_frame = get_snap_frame(snap_path)
     if snap_frame is None:
-        return None
+        snap_frame = get_first_available_frame(homography_path)
+        if snap_frame is None:
+            return None
+        print(f"[INFO] No snap frame detected; falling back to first available homography frame {snap_frame}")
 
     position_detections, image_width = get_positions_at_snap(positions_path, snap_frame)
     if not position_detections:
@@ -606,8 +664,20 @@ def get_player_data_for_frame(video_name, folder_name=None, cache_dir="cache", p
     # Get snap frames
     snaps = snap_data.get('snaps', [])
     if not snaps:
-        print(f"[WARNING] No snap frames found in snap detection")
-        return None
+        print(f"[INFO] No snap frames found — falling back to first available homography frame")
+        normalized_positions = homography_data.get('normalized_positions', {})
+        frame_nums = sorted(int(k) for k in normalized_positions.keys() if k.lstrip('-').isdigit())
+        if not frame_nums:
+            print(f"[INFO] No homography frames available either, static process skipped")
+            return {"no_snaps": True}
+        first_frame = frame_nums[0]
+        frame_detections = normalized_positions.get(str(first_frame), [])
+        print(f"[INFO] Using first available frame {first_frame} as fallback snap frame")
+        return {
+            "snap_frame": first_frame,
+            "snap_time": 0.0,
+            "detections": frame_detections
+        }
     
     # Get normalized positions
     normalized_positions = homography_data.get('normalized_positions', {})
@@ -843,6 +913,7 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
         if features is not None and os.path.isdir(model_dir):
             pred_label, confidence = _predict_play(features, model_dir)
             if pred_label is not None:
+                df["OFF FORM"] = df["OFF FORM"].astype(object)
                 df.at[video_row_index, "OFF FORM"] = pred_label
                 df.at[video_row_index, "OFF FORM CONFIDENCE"] = confidence
                 print(f"[INFO] Offense positions model: predicted_play={pred_label}, confidence={confidence:.3f}")
@@ -969,6 +1040,10 @@ def main():
     if frame_data is None:
         print("[ERROR] Failed to retrieve player data for snap frames")
         sys.exit(1)
+
+    if isinstance(frame_data, dict) and frame_data.get("no_snaps"):
+        print("[INFO] Static process skipped: no snap detected in this clip")
+        sys.exit(0)
     
     # Process frame data and update CSV
     processed_frame_data = process_frame_data(

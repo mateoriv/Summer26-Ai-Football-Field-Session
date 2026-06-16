@@ -70,6 +70,7 @@ def compute_velocity(detections, min_players_per_frame=15):
         mover_counts     – per-frame count of players whose corrected motion
                            exceeds a small threshold (used for multi-player check)
         player_counts    – per-frame raw player detection count
+        frame_numbers    – actual video frame number for each entry
         fps
 
     Frames with fewer than *min_players_per_frame* detections are treated as
@@ -82,6 +83,7 @@ def compute_velocity(detections, min_players_per_frame=15):
     velocities = []
     mover_counts = []
     player_counts = []
+    frame_numbers = []
     prev_centers = None
     small_move_threshold = 1.5   # pixels; below this = "not really moving"
 
@@ -94,6 +96,7 @@ def compute_velocity(detections, min_players_per_frame=15):
 
         n_players = len(centers)
         player_counts.append(n_players)
+        frame_numbers.append(frame.get("frame_number", len(frame_numbers)))
         centers = np.array(centers, dtype=np.float32)
 
         # Frames below the minimum player threshold are unreliable – skip and reset
@@ -146,6 +149,7 @@ def compute_velocity(detections, min_players_per_frame=15):
         np.array(velocities, dtype=np.float32),
         np.array(mover_counts, dtype=np.int32),
         np.array(player_counts, dtype=np.int32),
+        np.array(frame_numbers, dtype=np.int32),
         float(fps),
     )
 
@@ -223,6 +227,7 @@ def detect_snaps(
     mover_counts,
     fps,
     player_counts=None,
+    frame_numbers=None,
     skip_start_frames=0,
     set_window_seconds=1.5,
     min_movers=4,
@@ -373,7 +378,7 @@ def detect_snaps(
                     + np.abs(accel[i]) * 2.0
                     + (future_avg - pre_mean)
                 )
-                frame = max(0, int(i) - 2*fps)
+                frame = int(frame_numbers[i]) if frame_numbers is not None else int(i)
                 candidates.append({
                     "frame": int(frame),
                     "time": round(frame / fps, 3),
@@ -437,7 +442,7 @@ def main():
     raw = load_json(args.player_detections)
 
     print("[INFO] Computing camera-corrected velocities...")
-    velocities, mover_counts, player_counts, fps = compute_velocity(raw, min_players_per_frame=args.min_players)
+    velocities, mover_counts, player_counts, frame_numbers, fps = compute_velocity(raw, min_players_per_frame=args.min_players)
 
     if len(velocities) == 0:
         print("[ERROR] No velocity data computed.")
@@ -455,6 +460,7 @@ def main():
         mover_counts,
         fps,
         player_counts=player_counts,
+        frame_numbers=frame_numbers,
         skip_start_frames=skip_frames,
         set_window_seconds=args.set_window_seconds,
         min_movers=args.min_movers,

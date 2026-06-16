@@ -1394,9 +1394,9 @@ def load_video_for_custom_widget(parent, video_path):
             parent.progress_slider.slider.setRange(0, 100)
             parent.progress_slider.slider.setValue(0)  # Reset slider to zero when switching videos
             
+            parent.custom_video_total_frames = custom_video.total_frames
             # Load snap detection data if available
             load_snap_detection_data(parent, video_path)
-            parent.custom_video_total_frames = custom_video.total_frames
             
             total_time = custom_video.total_frames / custom_video.fps
             parent.time_label.setText(f"00:00 / {int(total_time//60):02d}:{int(total_time%60):02d}")
@@ -1450,10 +1450,10 @@ def set_current_video_path(parent, video_path):
     # Load snap detection data for timeline markers
     load_snap_detection_data(parent, video_path)
     
-    # Load homography data for virtual field
+    # Load homography data and offense positions for virtual field
     if hasattr(parent, 'current_folder') and hasattr(parent, 'virtual_field'):
         video_name = os.path.splitext(os.path.basename(video_path))[0]
-        from virtualField import load_homography_data_for_virtual_field
+        from virtualField import load_homography_data_for_virtual_field, load_offense_positions_for_virtual_field
         homography_loaded = load_homography_data_for_virtual_field(parent, video_name, parent.current_folder)
         # Load the classed pre-snap snapshot so the field shows offense vs
         # defense + the line of scrimmage (falls back to generic dots if absent).
@@ -1461,10 +1461,11 @@ def set_current_video_path(parent, video_path):
         load_formation_snapshot_for_virtual_field(parent, video_name, parent.current_folder)
         # If homography data not found, ensure virtual field is cleared
         if not homography_loaded:
-            # Clear the virtual field display
             if hasattr(parent, 'virtual_field'):
                 parent.virtual_field.current_frame = 0
                 parent.virtual_field.update()
+        # Load offense positions (clears to None if not available for this clip)
+        load_offense_positions_for_virtual_field(parent, video_name, parent.current_folder)
     
     # Sync the video widget's internal state with the parent's button states
     if hasattr(parent, 'custom_video'):
@@ -2065,15 +2066,23 @@ def _update_virtual_field_labels(parent):
 
 def toggle_offense_selection(parent, button):
     """Toggle highlight of the 11 offensive players at the snap frame."""
+    from PySide6.QtWidgets import QMessageBox
     if not hasattr(parent, "custom_video"):
-        print("No custom video widget found!")
         return
 
     if button.isChecked():
-        # Compute selection for current video
         ok = _compute_offense_selection_for_current_video(parent)
         if not ok:
             button.setChecked(False)
+            video_name = ""
+            if hasattr(parent, "current_video_path") and parent.current_video_path:
+                video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
+            msg = QMessageBox(parent)
+            msg.setWindowTitle("No Offense Data")
+            msg.setText(f"No offense data found for '{video_name}'.")
+            msg.setInformativeText("Run the full processing pipeline on this clip first (all 7 steps must complete, including Static Process).")
+            msg.setIcon(QMessageBox.Information)
+            msg.exec()
             return
         parent.custom_video.set_show_offense_selection(True)
         # Use position-labeled data so QB/defense/oline class names are present

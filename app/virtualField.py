@@ -29,15 +29,18 @@ except ImportError:
 
 # Add scripts directory to path to import field drawing functions
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+from staticProcess import identify_qb
 
 class VirtualFieldWidget(QWidget):
     """Widget that displays a static football field with player dots"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
         self.current_frame = 0
         self.homography_data = None
+        self.offense_positions = None  # list of (nx, ny) yard coords for 11 offensive players
+        self.qb_index = None
         self.field_image = None
         # Pre-snap formation snapshot (classed players in field yards + LOS),
         # written by formations/line_count_classifier.save_snapshot. When set,
@@ -52,7 +55,7 @@ class VirtualFieldWidget(QWidget):
         self.offense_label_points = []  # list of (center_x, center_y, class_name) in image space
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background-color: #2b2b2b; border: 1px solid #555555;")
-        
+
         # Load field image
         self.load_field_image()
         
@@ -133,6 +136,63 @@ class VirtualFieldWidget(QWidget):
             self.update()  # Force repaint to clear player dots
             return False
     
+    def load_offense_positions(self, video_name, folder_name):
+        """Load the 11 offensive player field positions from offense_positions.csv."""
+        try:
+            import pandas as pd
+            base_cache_dir = get_cache_dir()
+            csv_path = os.path.join(base_cache_dir, os.path.basename(folder_name), "offense_positions.csv")
+
+            if not os.path.exists(csv_path):
+                print(f"[Virtual Field] offense_positions.csv not found: {csv_path}")
+                self.offense_positions = None
+                self.qb_index = None
+                self.update()
+                return False
+
+            df = pd.read_csv(csv_path)
+            if "clip_name" not in df.columns:
+                self.offense_positions = None
+                self.qb_index = None
+                self.update()
+                return False
+
+            row = df.loc[df["clip_name"] == video_name]
+            if row.empty:
+                print(f"[Virtual Field] No offense row for '{video_name}'")
+                self.offense_positions = None
+                self.qb_index = None
+                self.update()
+                return False
+
+            row = row.iloc[0]
+            positions = []
+            for i in range(1, 12):
+                nx_col, ny_col = f"nx{i}", f"ny{i}"
+                if nx_col in row and ny_col in row:
+                    nx, ny = row[nx_col], row[ny_col]
+                    if pd.notna(nx) and pd.notna(ny):
+                        positions.append((float(nx), float(ny)))
+
+            if positions:
+                self.offense_positions = positions
+                points_for_qb = [[nx, ny, 0.0, 0.0] for nx, ny in positions]
+                self.qb_index = identify_qb(points_for_qb)
+                print(f"[Virtual Field] Loaded {len(positions)} offense positions for {video_name}, QB index: {self.qb_index}")
+                self.update()
+                return True
+
+            self.offense_positions = None
+            self.qb_index = None
+            self.update()
+            return False
+        except Exception as e:
+            print(f"[Virtual Field] Error loading offense positions: {e}")
+            self.offense_positions = None
+            self.qb_index = None
+            self.update()
+            return False
+
     def set_current_frame(self, frame_number):
         """Set the current frame and update the display"""
         self.current_frame = frame_number
@@ -435,44 +495,54 @@ class VirtualFieldWidget(QWidget):
         if not near_snap and self.homography_data and 'normalized_positions' in self.homography_data:
             normalized_positions = self.homography_data['normalized_positions']
             frame_key = str(self.current_frame)
-            
             if frame_key in normalized_positions:
                 players = normalized_positions[frame_key]
-                
-                # Draw each player as a dot
-                for i, player in enumerate(players):
-                    # Get coordinates from normalized_position
+
+                # Collect field x positions to find LOS and defense side
+                xs = []
+                for p in players:
+                    x = p.get('normalized_position', {}).get('x')
+                    if x is not None:
+                        xs.append(float(x))
+
+                defense_side = None  # 'above' or 'below' median x
+                if len(xs) >= 2:
+                    los_x = float(np.median(xs))
+                    farthest_dist = 0
+                    for x in xs:
+                        dist = abs(x - los_x)
+                        if dist > farthest_dist:
+                            farthest_dist = dist
+                            defense_side = 'above' if x > los_x else 'below'
+
+                for player in players:
                     normalized_pos = player.get('normalized_position', {})
                     x = normalized_pos.get('x', 0)
                     y = normalized_pos.get('y', 0)
-                    
+
                     # Get object label (e.g., 'qb', 'defense')
                     object_label = player.get('object_label', 'player').lower()
-                    
-                    # Convert field coordinates to widget coordinates
-                    # Field is 100 yards long and 53.33 yards wide
-                    # (0,0) is bottom left corner of the field
-                    
+
                     # Calculate field dimensions within the widget (accounting for aspect ratio)
                     field_width = min(self.width(), int(self.height() * 100 / 53.33))
                     field_height = min(self.height(), int(self.width() * 53.33 / 100))
-                    
+
                     # Center the field in the widget
                     field_x_offset = (self.width() - field_width) // 2
                     field_y_offset = (self.height() - field_height) // 2
-                    
+
                     # Map X: 0-100 yards to field_width pixels
                     widget_x = int(field_x_offset + (x * field_width / 100))
-                    
+
                     # Map Y: 0-53.33 yards to field_height pixels (flip Y so 0,0 is bottom)
                     widget_y = int(field_y_offset + field_height - (y * field_height / 53.33))
-                    
+
                     # Only draw if coordinates are within field bounds
                     field_left = field_x_offset
                     field_right = field_x_offset + field_width
                     field_top = field_y_offset
                     field_bottom = field_y_offset + field_height
-                    
+
                     if field_left <= widget_x <= field_right and field_top <= widget_y <= field_bottom:
                         role = self._role_for_dot(self.current_frame, player.get('original_bbox'))
                         if getattr(self, 'offense_selection_mode', False):
@@ -495,7 +565,9 @@ class VirtualFieldWidget(QWidget):
                                 dot_color = POSITION_COLORS['defense']
                             elif resolved_label == 'qb':
                                 dot_color = POSITION_COLORS['qb']
-                            elif resolved_label == 'wide_receiver':
+                            elif resolved_label == 'running_back':
+                                dot_color = POSITION_COLORS['running_back']
+                            elif resolved_label in ('wide_receiver', 'tight_end'):
                                 dot_color = POSITION_COLORS['wide_receiver']
                             else:
                                 dot_color = POSITION_COLORS['oline']
@@ -929,6 +1001,12 @@ def load_formation_snapshot_for_virtual_field(parent, video_name, folder_name):
     """Load the pre-snap formation snapshot (offense/defense + LOS) for the field."""
     if hasattr(parent, 'virtual_field'):
         return parent.virtual_field.load_formation_snapshot(video_name, folder_name)
+    return False
+
+def load_offense_positions_for_virtual_field(parent, video_name, folder_name):
+    """Load offensive player positions for the virtual field"""
+    if hasattr(parent, 'virtual_field'):
+        return parent.virtual_field.load_offense_positions(video_name, folder_name)
     return False
 
 def create_scoreboard(parent):

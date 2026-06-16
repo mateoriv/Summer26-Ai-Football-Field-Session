@@ -13,6 +13,7 @@ from PySide6.QtGui import QFont, QIcon, QTextCursor
 from video import load_snap_detection_data
 import subprocess
 import os
+import json
 import sys
 import json
 import time
@@ -176,31 +177,21 @@ class ProcessingWorker(QThread):
             prerequisites_exist = os.path.exists(homography_file) and os.path.exists(snap_file)
             if not prerequisites_exist:
                 return False
+            # If snap detection found no snaps, static process can never run — treat as done
+            try:
+                with open(snap_file, 'r') as f:
+                    snap_json = json.load(f)
+                if not snap_json.get('snaps'):
+                    return True
+            except Exception:
+                pass
             # If prerequisites exist, check if CSV has been augmented
             return self.is_csv_row_augmented()
         return False
     
     def ask_user_skip_step(self, step_name, step_index):
-        """Ask user if they want to skip a completed step or re-run it"""
-        # Emit signal to main thread to show dialog
-        self.user_choice_needed = True
-        self.pending_step_name = step_name
-        self.pending_step_index = step_index
-        self.user_choice_result = None
-        
-        # Emit signal to show dialog in main thread
-        self.show_skip_dialog.emit(step_name, step_index)
-        
-        # Wait for user choice (with timeout to prevent infinite wait)
-        timeout_count = 0
-        while self.user_choice_needed and timeout_count < 1000:  # 10 second timeout
-            time.sleep(0.01)
-            timeout_count += 1
-        
-        if timeout_count >= 1000:
-            return "cancel"  # Timeout - cancel processing
-        
-        return self.user_choice_result
+        """Automatically skip already-completed steps without prompting the user."""
+        return "skip"
     
     def set_user_choice(self, choice):
         """Set the user's choice from the dialog"""
