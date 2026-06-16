@@ -279,6 +279,10 @@ def auto_load_folder_content(parent, folder_path, preferred_video=None):
 
             first_csv = os.path.join(cache_dir, chosen)
             if os.path.exists(first_csv):
+                # The breakdown and the clips are the same play list: make sure
+                # EVERY video has a row (in clip order) so each one can be
+                # clicked from the sheet to check progress.
+                sync_csv_with_videos(first_csv, video_files)
                 parent.load_csv_file(first_csv)
                 print(f"Loaded CSV: {os.path.abspath(first_csv)}")
             else:
@@ -296,6 +300,54 @@ def auto_load_folder_content(parent, folder_path, preferred_video=None):
         print(f"Error auto-loading folder content: {e}")
         import traceback
         traceback.print_exc()
+
+def _gap_fill_clip_numbers(names):
+    """Given clip names like 'Wide - Clip 001', return the names missing from
+    the full 1..max numbering (the Hudl breakdown numbers every play even when
+    one camera angle has no clip). Returns [] unless ALL names share one
+    '<prefix><number>' pattern, so folders with free-form names are untouched."""
+    parsed = [re.fullmatch(r"(.*?)(\d+)", n) for n in names]
+    if not parsed or any(m is None for m in parsed):
+        return []
+    prefixes = {m.group(1) for m in parsed}
+    if len(prefixes) != 1:
+        return []
+    prefix = prefixes.pop()
+    width = max(len(m.group(2)) for m in parsed if int(m.group(2)) < 1000)
+    have = {int(m.group(2)) for m in parsed}
+    return [f"{prefix}{n:0{width}d}" for n in range(1, max(have) + 1)
+            if n not in have]
+
+
+def sync_csv_with_videos(csv_path, video_files):
+    """Ensure the folder's data CSV mirrors the Hudl play list 1:1, in order.
+
+    Every video gets a row, AND every skipped clip number gets a row too (the
+    breakdown numbers all plays 1..N even when the wide camera missed some) --
+    so the sheet always has exactly one row per play, in clip order. Existing
+    rows (labels, predictions) are never modified, only kept in order.
+    """
+    try:
+        df = pd.read_csv(csv_path)
+        if "CLIP NAME" not in df.columns or not video_files:
+            return
+        have = set(df["CLIP NAME"].astype(str).str.strip())
+        missing = [name for name in (os.path.splitext(v)[0] for v in video_files)
+                   if name not in have]
+        all_names = sorted(have | set(missing), key=natural_key)
+        missing += [n for n in _gap_fill_clip_numbers(all_names) if n not in have]
+        if missing:
+            df = pd.concat([df, pd.DataFrame({"CLIP NAME": missing})],
+                           ignore_index=True)
+        ordered = df.sort_values("CLIP NAME", key=lambda s: s.map(natural_key),
+                                 kind="stable").reset_index(drop=True)
+        if missing or not ordered.equals(df):
+            ordered.to_csv(csv_path, index=False)
+        if missing:
+            print(f"Data sheet: added {len(missing)} clip row(s) -- one row per play, in order")
+    except Exception as e:
+        print(f"Data sheet/video sync skipped: {e}")
+
 
 def create_video_based_csv(output_dir, video_files, folder_name=None):
     """Create a CSV file with video clip names as the first column"""

@@ -111,6 +111,10 @@ FIELD_MARGIN_YD = 2.0
 # linemen are never collapsed into one.
 DEDUP_YD = 0.6
 
+# A human-verified QB click is matched to a detection by track id first, else
+# by pixel distance within this tolerance (~a player's width on wide footage).
+VERIFIED_MATCH_TOL_PX = 60.0
+
 
 # Module-local aliases so existing call sites stay unchanged.
 _norm_cls = normalize_class
@@ -160,7 +164,8 @@ def _aggregate_tracks(positions_data, snap_frame, window):
         b = cands[0][1].get("bbox") or {}
         if b.get("center_x") is None:
             continue
-        out.append({"class": cls, "center_x": b["center_x"], "center_y": b["center_y"]})
+        out.append({"class": cls, "center_x": b["center_x"], "center_y": b["center_y"],
+                    "track_id": tid})
 
     if not out:  # no tracks -> single snap frame
         for d in untracked:
@@ -168,8 +173,38 @@ def _aggregate_tracks(positions_data, snap_frame, window):
             if b.get("center_x") is None:
                 continue
             out.append({"class": _norm_cls(d.get("class")),
-                        "center_x": b["center_x"], "center_y": b["center_y"]})
+                        "center_x": b["center_x"], "center_y": b["center_y"],
+                        "track_id": None})
     return out
+
+
+def _match_verified_qb(verified_qb, detections, tol_px=VERIFIED_MATCH_TOL_PX):
+    """Index of the detection the human-verified QB refers to, or None.
+
+    `detections`: dicts with center_x/center_y (pixels) and optional track_id.
+    A track-id match wins outright (robust to small snap-frame drift); else the
+    nearest pixel centre within `tol_px`. No match -> None (the verification is
+    dropped rather than guessed onto the wrong player).
+    """
+    if not verified_qb or not detections:
+        return None
+    vtid = verified_qb.get("track_id")
+    if vtid is not None:
+        for i, d in enumerate(detections):
+            if d.get("track_id") == vtid:
+                return i
+    vx, vy = verified_qb.get("x"), verified_qb.get("y")
+    if vx is None or vy is None:
+        return None
+    best, best_d = None, float(tol_px) ** 2
+    for i, d in enumerate(detections):
+        cx, cy = d.get("center_x"), d.get("center_y")
+        if cx is None:
+            continue
+        dd = (cx - vx) ** 2 + (cy - vy) ** 2
+        if dd < best_d:
+            best_d, best = dd, i
+    return best
 
 
 def _best_homography(frame_correspondences, snap_frame):
@@ -192,7 +227,8 @@ def _on_field(x, y):
             -FIELD_MARGIN_YD <= y <= FIELD_WIDTH_YD + FIELD_MARGIN_YD)
 
 
-def jersey_team_points(positions_data, snap_frame, video_name, folder_name):
+def jersey_team_points(positions_data, snap_frame, video_name, folder_name,
+                       verified_qb=None):
     """Two-team split by JERSEY COLOUR at the snap frame (jersey_color module).
 
     Returns [(center_x_px, center_y_px, 'offense'|'defense'), ...] for the
@@ -200,6 +236,9 @@ def jersey_team_points(positions_data, snap_frame, video_name, folder_name):
     (no cv2, no source video, kits too alike) -- the caller then keeps the
     detector-class split. Colour fixes the leak where a mislabeled defender
     joins the offense and corrupts the front/strength counts.
+
+    `verified_qb` (optional): the human-clicked QB. Its cluster IS the offense
+    -- a certain colour anchor replacing the class-majority cluster naming.
     """
     try:
         import jersey_color as jc
@@ -211,7 +250,14 @@ def jersey_team_points(positions_data, snap_frame, video_name, folder_name):
         frame = jc.read_frame(video, snap_frame)
         if frame is None:
             return None
-        res = jc.assign_teams(frame, jc._detections_at(positions_data, snap_frame))
+        dets = jc._detections_at(positions_data, snap_frame)
+        anchor = None
+        if verified_qb:
+            pts = [{"center_x": (d.get("bbox") or {}).get("center_x"),
+                    "center_y": (d.get("bbox") or {}).get("center_y"),
+                    "track_id": d.get("track_id")} for d in dets]
+            anchor = _match_verified_qb(verified_qb, pts)
+        res = jc.assign_teams(frame, dets, offense_anchor_index=anchor)
         if not res.get("reliable"):
             return None
         pts = [(float(p["bbox"]["center_x"]), float(p["bbox"]["center_y"]), p["team"])
@@ -232,7 +278,7 @@ def _nearest_jersey_team(points, cx, cy, tol_px=40.0):
 
 
 def project_snapshot(positions_data, frame_correspondences, snap_frame, window=None,
-                     jersey_teams=None):
+                     jersey_teams=None, verified_qb=None):
     """Project the pre-snap classed detections to field yards.
 
     Returns (players, H, h_frame) where `players` is a list of
@@ -243,6 +289,10 @@ def project_snapshot(positions_data, frame_correspondences, snap_frame, window=N
     by jersey colour; when given it OVERRIDES the detector-class team per
     player. The labeled QB is exempt -- a differently-coloured QB kit must not
     flip the one anchor the geometry depends on.
+
+    `verified_qb` (optional, from verified_store): the human-clicked QB. The
+    matched detection is FORCED to role=qb, team=offense (whatever the
+    detector or the colour split said) and tagged so classify() anchors on it.
     """
     from perFrameHomographyTransform import transform_point
 
@@ -253,9 +303,15 @@ def project_snapshot(positions_data, frame_correspondences, snap_frame, window=N
     if H is None:
         return [], None, h_frame
 
+    agg = _aggregate_tracks(positions_data, snap_frame, window)
+    vqb_i = _match_verified_qb(verified_qb, agg) if verified_qb else None
+
     players = []
-    for d in _aggregate_tracks(positions_data, snap_frame, window):
+    for i, d in enumerate(agg):
         cls = d["class"]
+        is_vqb = (i == vqb_i)
+        if is_vqb:
+            cls = QB_CLASS  # the human says so -- overrides the detector
         if cls in IGNORE_CLASSES:
             continue
         if cls == DEFENSE_CLASS:
@@ -271,14 +327,18 @@ def project_snapshot(positions_data, frame_correspondences, snap_frame, window=N
         p = transform_point((d["center_x"], d["center_y"]), H)
         if p is None or not _on_field(p[0], p[1]):
             continue
-        players.append({"role": cls, "team": team, "x": float(p[0]), "y": float(p[1])})
+        rec = {"role": cls, "team": team, "x": float(p[0]), "y": float(p[1])}
+        if is_vqb:
+            rec["_vqb"] = True
+        players.append(rec)
     return _dedup_same_team(players), H, h_frame
 
 
 def _dedup_same_team(players, tol=DEDUP_YD):
     """Greedily merge same-team detections within `tol` yards (fragmented
     tracks). Keeps the first point; prefers a specific role over a generic one
-    when a duplicate carries the OL/QB label."""
+    when a duplicate carries the OL/QB label. A human-verified QB tag always
+    survives the merge (and forces the kept point's role to qb)."""
     kept = []
     for p in players:
         dup = None
@@ -290,6 +350,10 @@ def _dedup_same_team(players, tol=DEDUP_YD):
                 break
         if dup is None:
             kept.append(dict(p))
+            continue
+        if p.get("_vqb"):
+            dup["_vqb"] = True
+            dup["role"] = QB_CLASS
         elif dup["role"] not in (OL_CLASS, QB_CLASS) and p["role"] in (OL_CLASS, QB_CLASS):
             dup["role"] = p["role"]  # keep the more informative anchor label
     return kept
@@ -367,14 +431,21 @@ def classify(players):
     depth = depths(attack_dir)
 
     # --- Recover the QB: central offense player just behind the line ------ #
-    # Candidates sit 1-7 yd behind the LOS (under center to shotgun). Prefer a
-    # labeled QB if one happens to be there; else the most CENTRAL back.
-    cand = [i for i in range(n) if -7.0 <= depth[i] <= -1.0]
-    qb_idx = None
-    if cand:
-        labeled = [i for i in cand if offense[i]["role"] == QB_CLASS]
-        pool = labeled if labeled else cand
-        qb_idx = min(pool, key=lambda i: abs(off_y[i] - center0))
+    # A HUMAN-VERIFIED QB (tagged by project_snapshot) wins outright, even
+    # outside the usual depth band -- this is the rescue path for clips where
+    # geometric recovery fails. Otherwise: candidates sit 1-7 yd behind the
+    # LOS (under center to shotgun); prefer a labeled QB if one happens to be
+    # there; else the most CENTRAL back.
+    qb_verified = False
+    qb_idx = next((i for i in range(n) if offense[i].get("_vqb")), None)
+    if qb_idx is not None:
+        qb_verified = True
+    else:
+        cand = [i for i in range(n) if -7.0 <= depth[i] <= -1.0]
+        if cand:
+            labeled = [i for i in cand if offense[i]["role"] == QB_CLASS]
+            pool = labeled if labeled else cand
+            qb_idx = min(pool, key=lambda i: abs(off_y[i] - center0))
 
     if qb_idx is not None and abs(off_x[qb_idx] - los_x) > 0.3:
         # The QB is on the offense's side of the ball, so the LOS is on the
@@ -505,6 +576,7 @@ def classify(players):
         "off_line_left": left,   # back-compat aliases
         "off_line_right": right,
         "qb_recovered": qb_idx is not None,
+        "qb_verified": qb_verified,
         "n_offense": n,
         "n_defense": len(defense),
         "attack_dir_x": int(attack_dir),
@@ -517,7 +589,7 @@ def classify(players):
             {"role": p["role"], "team": p["team"],
              "x": round(p["x"], 2), "y": round(p["y"], 2),
              "pos": p.get("_pos"), "side": p.get("_side"), "grp": p.get("_grp"),
-             "ctr": bool(p.get("_ctr"))}
+             "ctr": bool(p.get("_ctr")), "vqb": bool(p.get("_vqb"))}
             for p in players
         ],
         "los": {"x_yd": round(los_x, 1), "center_y_yd": round(center_y, 1),
@@ -546,17 +618,37 @@ def recognize_from_cache(video_name, folder_name, base_cache_dir, window=None):
     pdata = _load(pos_p)
     corr = _load(corr_p).get("frame_correspondences", {})
 
+    # Human-verified QB (verified_store), with a staleness guard: if the
+    # verification was made on a frame outside the track-aggregation window of
+    # the current snap, pixel positions have drifted -- only a track-id match
+    # may use it, otherwise it is dropped (never guessed).
+    vqb = None
+    try:
+        import verified_store
+        vqb = (verified_store.load_verified(video_name, folder_name, base_cache_dir)
+               or {}).get("qb")
+        win = window if window is not None else int(
+            (pdata.get("tracking") or {}).get("window") or 30)
+        if vqb and abs(int(vqb.get("frame", snap_frame)) - int(snap_frame)) > win:
+            if vqb.get("track_id") is None:
+                vqb = None
+            else:
+                vqb = {"track_id": vqb["track_id"]}  # pixel match no longer valid
+    except Exception:
+        vqb = None
+
     # Two team splits, best-of: jersey colour beats the detector class when its
     # geometry holds up (it removes leaked defenders from the counts), but when
     # the colour split breaks the read (real linemen flipped off the offense)
     # we fall back to the class split rather than lose the clip.
-    jersey = jersey_team_points(pdata, snap_frame, video_name, folder_name)
+    jersey = jersey_team_points(pdata, snap_frame, video_name, folder_name,
+                                verified_qb=vqb)
     attempts = ([("jersey_color", jersey)] if jersey else []) + [("detector_class", None)]
 
     best = None
     for source, jt in attempts:
         players, H, h_frame = project_snapshot(pdata, corr, snap_frame, window=window,
-                                               jersey_teams=jt)
+                                               jersey_teams=jt, verified_qb=vqb)
         if H is None:
             return {"on_line_count": None, "reason": "no valid homography near snap"}
         if not players:
@@ -593,6 +685,7 @@ def save_snapshot(result, video_name, folder_name, base_cache_dir):
         "recv_left": result.get("recv_left"),
         "recv_right": result.get("recv_right"),
         "qb_recovered": result.get("qb_recovered"),
+        "qb_verified": result.get("qb_verified"),
         "center_found": result.get("center_found"),
         "n_offense": result.get("n_offense"),
         "n_defense": result.get("n_defense"),

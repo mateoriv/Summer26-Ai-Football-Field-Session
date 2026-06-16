@@ -154,12 +154,16 @@ def _kmeans2(features):
     return labels, centers, sep
 
 
-def assign_teams(frame, detections):
+def assign_teams(frame, detections, offense_anchor_index=None):
     """Cluster detections into two teams by jersey colour, then name the
     clusters offense/defense by detector-class majority.
 
     `detections` : list of dicts with at least `class` and `bbox` (pixel
     x1/y1/x2/y2), e.g. straight from a positions-JSON frame.
+
+    `offense_anchor_index` (optional): index into `detections` of a player
+    KNOWN to be on offense (e.g. the human-verified QB). Its cluster is named
+    offense outright -- a certain anchor replacing the class-majority vote.
 
     Returns dict:
       players   : list of {class, bbox, color(BGR list|None), cluster(0/1|None),
@@ -197,16 +201,23 @@ def assign_teams(frame, detections):
         players[i]["cluster"] = int(labels[j])
     result["separation"] = sep
 
-    # Name clusters by detector-class majority: more offense-classed -> offense.
-    score = {0: 0, 1: 0}
-    for i in idx:
-        c = players[i]["cluster"]
-        cls = players[i]["class"]
-        if cls == DEFENSE_CLASS:
-            score[c] -= 1
-        elif cls in OFFENSE_CLASSES:
-            score[c] += 1
-    off_c = 0 if score[0] >= score[1] else 1
+    # Name the clusters. A known-offense anchor (human-verified QB) decides
+    # outright; otherwise fall back to detector-class majority.
+    off_c = None
+    if (offense_anchor_index is not None
+            and 0 <= offense_anchor_index < len(players)
+            and players[offense_anchor_index]["cluster"] is not None):
+        off_c = players[offense_anchor_index]["cluster"]
+    if off_c is None:
+        score = {0: 0, 1: 0}
+        for i in idx:
+            c = players[i]["cluster"]
+            cls = players[i]["class"]
+            if cls == DEFENSE_CLASS:
+                score[c] -= 1
+            elif cls in OFFENSE_CLASSES:
+                score[c] += 1
+        off_c = 0 if score[0] >= score[1] else 1
     def_c = 1 - off_c
     result["offense_cluster"], result["defense_cluster"] = off_c, def_c
     for i in idx:

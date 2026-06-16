@@ -298,9 +298,13 @@ class VirtualFieldWidget(QWidget):
             color = QB_GOLD if is_qb else (OFFENSE if p.get("team") == "offense" else DEFENSE)
             painter.setBrush(QBrush(color))
             # Players ON the line of scrimmage get a thick white ring so the
-            # "front count" is visually countable; others a thin ring.
+            # "front count" is visually countable; others a thin ring. A
+            # human-verified QB gets a thick gold ring.
             on_line = (p.get("pos") == "line")
-            painter.setPen(QPen(QColor(255, 255, 255), 3 if on_line else 1))
+            if p.get("vqb"):
+                painter.setPen(QPen(QB_GOLD, 3))
+            else:
+                painter.setPen(QPen(QColor(255, 255, 255), 3 if on_line else 1))
             r = 8 if on_line else 7
             painter.drawEllipse(wx - r, wy - r, 2 * r, 2 * r)
             if is_qb:
@@ -350,7 +354,11 @@ class VirtualFieldWidget(QWidget):
             c_ok = "✓" if snap.get("center_found") else "--"
             n_off = snap.get("n_offense", "--")
             n_def = snap.get("n_defense", "--")
-            lines.append((f"QB {qb_ok}  ·  C {c_ok}  ·  OFF {n_off}  ·  DEF {n_def}", GREY))
+            if snap.get("qb_verified"):
+                lines.append((f"QB ✓ VERIFIED  ·  C {c_ok}  ·  OFF {n_off}  ·  DEF {n_def}",
+                              QColor(255, 200, 0)))
+            else:
+                lines.append((f"QB {qb_ok}  ·  C {c_ok}  ·  OFF {n_off}  ·  DEF {n_def}", GREY))
             src = snap.get("team_source")
             if src:
                 lines.append((f"TEAMS: {'jersey colour' if src == 'jersey_color' else 'detector class'}",
@@ -870,13 +878,36 @@ def create_virtual_field_dock(parent):
     scoreboard_widget.hide()  # Start with scoreboard hidden
     layout.addWidget(scoreboard_widget)
     
-    # Create the virtual field widget
+    # Field on the left, formation choice panel on the right, side by side so
+    # the coach compares the recommended formation pictures against the field.
+    field_row = QHBoxLayout()
+    field_row.setSpacing(6)
     virtual_field = VirtualFieldWidget(parent)
-    layout.addWidget(virtual_field)
-    
+    field_row.addWidget(virtual_field, stretch=1)
+
+    try:
+        from formationPanel import FormationPanel
+        formation_panel = FormationPanel(parent)
+        field_row.addWidget(formation_panel, stretch=0)
+        parent.formation_panel = formation_panel
+        # Confirm -> refresh the formation label/overlays (cache-only, deferred
+        # import so this module doesn't import video at load time).
+        def _on_formation_confirmed(_name, p=parent):
+            try:
+                from video import _load_formation_label_for_current_video
+                _load_formation_label_for_current_video(p)
+            except Exception as e:
+                print(f"[FORMATION PANEL] refresh after confirm failed: {e}")
+        formation_panel.formation_confirmed.connect(_on_formation_confirmed)
+    except Exception as e:
+        print(f"[FORMATION PANEL] not loaded: {e}")
+        parent.formation_panel = None
+
+    layout.addLayout(field_row)
+
     # Store reference for updates
     parent.virtual_field = virtual_field
-    
+
     main_widget.setLayout(layout)
     dock.setWidget(main_widget)
     

@@ -791,7 +791,8 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
             lc_result = line_count_classifier.recognize_from_cache(video_name, folder_name, base_cache_dir)
             if lc_result.get("on_line_count") is not None:
                 for col in ("FRONT COUNT", "FRONT STRENGTH", "FRONT RELIABLE",
-                            "ATTACK DIR", "OFFENSE COUNT", "DEFENSE COUNT"):
+                            "ATTACK DIR", "OFFENSE COUNT", "DEFENSE COUNT",
+                            "QB VERIFIED"):
                     if col not in df.columns:
                         df[col] = ""
                 df.at[video_row_index, "FRONT COUNT"] = int(lc_result["on_line_count"])
@@ -800,6 +801,9 @@ def process_frame_data(frame_data, video_name, folder_name=None, cache_dir="cach
                 df.at[video_row_index, "ATTACK DIR"] = int(lc_result["attack_dir_x"])
                 df.at[video_row_index, "OFFENSE COUNT"] = int(lc_result["n_offense"])
                 df.at[video_row_index, "DEFENSE COUNT"] = int(lc_result["n_defense"])
+                # The verification itself lives in cache/<folder>/verified/ and
+                # survives reprocessing -- this column just surfaces it.
+                df.at[video_row_index, "QB VERIFIED"] = "✓" if lc_result.get("qb_verified") else ""
                 line_count_classifier.save_snapshot(lc_result, video_name, folder_name, base_cache_dir)
                 print(f"[INFO] Front count: {lc_result['on_line_count']} on the line, "
                       f"strength={lc_result['strength']} "

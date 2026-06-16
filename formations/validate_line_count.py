@@ -40,6 +40,7 @@ import line_count_classifier as L  # noqa: E402
 
 TEMPLATE_CSV = os.path.join(HERE, "offense_formation_coordinates_17.csv")
 LABELS_CSV = os.path.join(ROOT, "models", "offense_positions", "play_predictions.csv")
+BREAKDOWN_XLSX = os.path.join(ROOT, "data", "CSAI_FORMATIONS", "breakdown.xlsx")
 
 # Template columns: Q=QB, T=back; the rest are receivers/TEs whose lateral sign
 # (x, negative = one side) gives the strength side.
@@ -78,6 +79,18 @@ def _norm_formname(name):
     return key
 
 
+def _breakdown_labels():
+    """Coach labels from breakdown.xlsx: row N is 'Wide - Clip N' (confirmed
+    with the coach -- the breakdown numbers every play 1..1025 in clip order;
+    OFF FORM is the formation call). Returns {clip_name: label}."""
+    bd = pd.read_excel(BREAKDOWN_XLSX)
+    out = {}
+    for i, v in enumerate(bd["OFF FORM"].tolist(), start=1):
+        if isinstance(v, str) and v.strip():
+            out[f"Wide - Clip {i:03d}"] = v.strip()
+    return out
+
+
 def _pred_structure(result):
     if result.get("on_line_count") is None:
         return None
@@ -95,7 +108,13 @@ def main():
     args = ap.parse_args()
 
     templates = _template_structures()
-    labels = pd.read_csv(LABELS_CSV, index_col=0)["actual_play"].to_dict()
+    # Official ground truth: the coach's breakdown (1025 plays, clip order).
+    # play_predictions.csv is kept only as a fallback -- its labels were found
+    # partly misaligned (30/89 agree with the breakdown).
+    if os.path.exists(BREAKDOWN_XLSX):
+        labels = _breakdown_labels()
+    else:
+        labels = pd.read_csv(LABELS_CSV, index_col=0)["actual_play"].to_dict()
 
     # Map each labeled clip to its cache folder (if processed).
     clip_folder = {}

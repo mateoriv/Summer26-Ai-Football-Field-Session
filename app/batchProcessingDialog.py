@@ -73,37 +73,36 @@ class ProcessingCancelled(Exception):
     pass
 
 def is_video_processed(video_path, video_folder, output_dir="cache"):
-    """Check if a video has already been fully processed.
-    
-    A video is considered processed if all required files exist:
-    - correspondence/{video_name}_correspondence.json
-    - homography/{video_name}_normalized_positions.json
-    - players/{video_name}_detection.json
-    - positions/{video_name}_position.json
-    - snap_detection/{video_name}_snap_detection.json
-    - yard_markers/{video_name}_yard_markers.json
+    """Check if a video has already been *fully* processed.
+
+    The homography file is the final per-clip artifact of the pipeline (Static
+    Process after it only appends rows to the shared folder CSV). A clip that
+    was interrupted mid-pipeline has detection but no homography -- treating it
+    as "processed" would skip it forever and leave it half-done, so we key the
+    check on homography. This matches the green "trained" colour in the data
+    sheet.
     """
     try:
         video_name = Path(video_path).stem
-        
+
         if not os.path.isabs(output_dir):
             # Use persistent cache directory instead of temp PyInstaller folder
             output_dir = get_cache_dir()
         else:
             output_dir = os.path.abspath(output_dir)
-        
+
         if video_folder:
             video_folder = os.path.basename(video_folder.rstrip("/\\"))
         else:
             video_folder = Path(video_path).parent.name
-        
+
         base_dir = os.path.join(output_dir, video_folder)
-        
-        # Check for all required files
+
+        # Only a clip with homography output is considered fully trained.
         required_files = [
-            os.path.join(base_dir, "players", f"{video_name}_detection.json"),
+            os.path.join(base_dir, "homography", f"{video_name}_normalized_positions.json"),
         ]
-        
+
         # All files must exist for video to be considered processed
         return all(os.path.exists(f) for f in required_files)
     except Exception as e:
@@ -121,8 +120,15 @@ def process_single_video_standalone(video_path, video_folder, output_dir="cache"
     )
 
 
-def process_single_video(video_path, video_folder, output_dir="cache", output_callback=None, status_callback=None, cancel_check=None):
-    """Process a single video sequentially, mirroring ProcessingDialog steps."""
+def process_single_video(video_path, video_folder, output_dir="cache", output_callback=None, status_callback=None, cancel_check=None, formation_only=False):
+    """Process a single video sequentially, mirroring ProcessingDialog steps.
+
+    When formation_only is True, only the final Static Process step (the
+    formation method) is run; the expensive detection/homography steps (1-6) are
+    skipped and their existing cache is reused. This is the "method test" path:
+    after changing the formation logic, re-run it across every already-processed
+    clip in seconds without redoing YOLO/homography.
+    """
     emit_output = output_callback or (lambda msg: print(msg, flush=True))
     emit_status = status_callback or (lambda msg: emit_output(msg))
     
@@ -293,6 +299,13 @@ def process_single_video(video_path, video_folder, output_dir="cache", output_ca
             steps[6]["cmd"] = cmd_result
             steps[6]["env"] = None
         
+        # Method-test path: keep only the Static Process (formation) step and
+        # reuse the cached detection/homography from a prior full run. Its prereq
+        # ([snap_output, homography_output]) guards clips that were never fully
+        # processed -- they're reported missing rather than silently mis-run.
+        if formation_only:
+            steps = [s for s in steps if s["name"] == "Static Process"]
+
         emit_output(f"Starting processing for {video_name}")
         _batch_logger.debug(f"Processing {video_name}: Output directory: {output_dir}, Video folder: {video_folder}")
         for step in steps:
@@ -426,9 +439,10 @@ class BatchProcessingWorker(QThread):
     batch_failed = Signal(str)  # error message
     batch_cancelled = Signal()  # batch processing cancelled
     
-    def __init__(self, video_paths, output_dir="cache", max_workers=2):
+    def __init__(self, video_paths, output_dir="cache", max_workers=2, formation_only=False):
         super().__init__()
         self.video_paths = video_paths
+        self.formation_only = formation_only
         # Use persistent cache directory instead of temp PyInstaller folder
         if not os.path.isabs(output_dir):
             self.output_dir = get_cache_dir()
@@ -504,7 +518,8 @@ class BatchProcessingWorker(QThread):
                         output_dir=self.output_dir,
                         output_callback=clip_output,
                         status_callback=clip_status,
-                        cancel_check=self.is_cancelled_check
+                        cancel_check=self.is_cancelled_check,
+                        formation_only=self.formation_only
                     )
                 except ProcessingCancelled:
                     _batch_logger.warning(f"Batch processing cancelled by user at video {index}/{self.total_videos}: {video_name}")
@@ -745,7 +760,19 @@ class BatchProcessingDialog(QDialog):
         """)
         self.skip_processed_checkbox.setToolTip("Skip videos that have already been fully processed")
         button_layout.addWidget(self.skip_processed_checkbox)
-        
+
+        # Formation-only ("method test") checkbox -- re-runs ONLY the formation
+        # step (Static Process) on already-processed clips, reusing the cached
+        # detection/homography. Click this every time the formation method
+        # changes to re-score all clips in seconds without redoing YOLO.
+        self.formation_only_checkbox = QCheckBox("Re-run formation only (method test)")
+        self.formation_only_checkbox.setStyleSheet(self.skip_processed_checkbox.styleSheet())
+        self.formation_only_checkbox.setToolTip(
+            "Re-run only the formation method on clips that are already fully "
+            "processed. Skips detection/homography and reuses their cache."
+        )
+        button_layout.addWidget(self.formation_only_checkbox)
+
         # Add small spacing between checkbox and buttons
         button_layout.addSpacing(10)
         
@@ -862,8 +889,25 @@ class BatchProcessingDialog(QDialog):
         # Filter out already processed videos if checkbox is checked
         videos_to_process = self.video_paths.copy()
         skipped_count = 0
-        
-        if self.skip_processed_checkbox.isChecked():
+
+        formation_only = self.formation_only_checkbox.isChecked()
+        video_folder = self.parent_window.current_folder if hasattr(self.parent_window, 'current_folder') else None
+
+        if formation_only:
+            # Formation-only needs the upstream cache, so it runs on clips that
+            # ARE fully processed; clips without it are skipped (nothing to read).
+            ready, not_ready = [], []
+            for video_path in self.video_paths:
+                (ready if is_video_processed(video_path, video_folder) else not_ready).append(video_path)
+            videos_to_process = ready
+            skipped_count = len(not_ready)
+            self.add_output(f"Formation-only re-run: {len(ready)} processed clip(s) will be re-scored, "
+                            f"{skipped_count} not-yet-processed clip(s) skipped.")
+            if not_ready:
+                for video_path in not_ready:
+                    self.add_output(f"  - skipped (no cache): {Path(video_path).stem}")
+            self.add_output("")
+        elif self.skip_processed_checkbox.isChecked():
             processed_videos = []
             unprocessed_videos = []
             
@@ -908,7 +952,7 @@ class BatchProcessingDialog(QDialog):
         max_workers = 15
         
         _batch_logger.info(f"Creating batch processing worker for {len(videos_to_process)} videos (max_workers: {max_workers})")
-        self.worker = BatchProcessingWorker(videos_to_process, max_workers=max_workers)
+        self.worker = BatchProcessingWorker(videos_to_process, max_workers=max_workers, formation_only=formation_only)
         
         # Connect signals
         self.worker.progress_updated.connect(self.update_progress)

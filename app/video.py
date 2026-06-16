@@ -11,7 +11,7 @@ import sys
 import cv2
 import numpy as np
 import pandas as pd
-from fileAccess import get_cache_dir
+from fileAccess import get_cache_dir, get_project_root
 
 # Define colors for specific position labels
 POSITION_COLORS = {
@@ -143,6 +143,13 @@ class CustomVideoWidget(QWidget):
         self.fps = 30.0
         self.is_playing = False
         self.parent_window = parent
+        # Human-in-the-loop QB verification: when qb_verify_mode is on, a
+        # click on the video records the QB (see record_qb_verification).
+        # verified_qb holds the clip's saved verification for the overlay.
+        self.qb_verify_mode = False
+        self.verified_qb = None
+        self.frame_width = 0
+        self.frame_height = 0
         
         # Timer for frame updates (~30 FPS playback)
         self.timer = QTimer()
@@ -181,6 +188,33 @@ class CustomVideoWidget(QWidget):
         """Toggle highlighting of the selected 11 offensive players at the snap frame."""
         self.show_offense_selection = show
         self.update()
+
+    def widget_to_video_coords(self, wx, wy):
+        """Map a widget click to VIDEO pixel coordinates, inverting the
+        letterboxed paint mapping (KeepAspectRatio + centering). Returns
+        (video_x, video_y) or None when the click is outside the frame."""
+        W, H = self.frame_width, self.frame_height
+        if W <= 0 or H <= 0 or self.width() <= 0 or self.height() <= 0:
+            return None
+        scale = min(self.width() / W, self.height() / H)
+        draw_w, draw_h = int(W * scale), int(H * scale)
+        x_off = (self.width() - draw_w) // 2
+        y_off = (self.height() - draw_h) // 2
+        if not (x_off <= wx < x_off + draw_w and y_off <= wy < y_off + draw_h):
+            return None
+        return ((wx - x_off) * W / draw_w, (wy - y_off) * H / draw_h)
+
+    def mousePressEvent(self, event):
+        """In QB-verify mode, a left click records the QB at this frame."""
+        if not self.qb_verify_mode or event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        pos = event.position()
+        mapped = self.widget_to_video_coords(pos.x(), pos.y())
+        if mapped is None:
+            return
+        record_qb_verification(self.parent_window, self.current_frame,
+                               mapped[0], mapped[1])
 
     def set_formation_labels(self, model=None, model_conf=None,
                              qb=None, qb_score=None, qb_reliable=True, coach=None):
@@ -265,7 +299,7 @@ class CustomVideoWidget(QWidget):
 
                 # Recognized offense formation, drawn in the top-left corner of
                 # the video (over the frame, independent of the box toggles).
-                if self.model_label or self.qb_label or self.coach_label:
+                if self.model_label or self.qb_label or self.coach_label or self.verified_qb:
                     self._draw_formation_label(painter, x_offset, y_offset)
 
                 # Define data sources to draw
@@ -305,6 +339,23 @@ class CustomVideoWidget(QWidget):
                 # Team-colour legend so red/blue/gold reads without a manual.
                 if self.show_boxes and self.position_detection_data:
                     self._draw_team_legend(painter, x_offset, y_offset, scaled_pixmap.width())
+
+                # Gold crosshair ring at the human-verified QB, shown around
+                # the verified frame so the coach sees what got anchored.
+                if self.verified_qb and self.frame_width:
+                    vf = self.verified_qb.get("frame")
+                    if vf is not None and abs(self.current_frame - int(vf)) <= 20:
+                        sx = scaled_pixmap.width() / self.frame_width
+                        sy = scaled_pixmap.height() / self.frame_height
+                        px = int(self.verified_qb["x"] * sx) + x_offset
+                        py = int(self.verified_qb["y"] * sy) + y_offset
+                        painter.setPen(QPen(QColor(255, 200, 0), 3))
+                        painter.setBrush(Qt.NoBrush)
+                        painter.drawEllipse(px - 14, py - 14, 28, 28)
+                        painter.drawLine(px - 22, py, px - 10, py)
+                        painter.drawLine(px + 10, py, px + 22, py)
+                        painter.drawLine(px, py - 22, px, py - 10)
+                        painter.drawLine(px, py + 10, px, py + 22)
             else:
                 # Draw black background if no frame
                 painter.fillRect(self.rect(), QColor(0, 0, 0))
@@ -381,6 +432,9 @@ class CustomVideoWidget(QWidget):
             else:
                 c_color = QColor(180, 180, 180)
             lines.append((text, c_color))
+
+        if self.verified_qb:
+            lines.append(("QB ✓ VERIFIED", QColor(255, 200, 0)))
 
         if not lines:
             return
@@ -611,6 +665,8 @@ class CustomVideoWidget(QWidget):
         
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.current_frame = 0
         
         print(f"Loaded video: {self.total_frames} frames at {self.fps} FPS")
@@ -1112,6 +1168,34 @@ def create_video_title_bar(dock):
     legend_checkbox.clicked.connect(lambda: toggle_legend(dock.parent(), legend_checkbox))
     layout.addWidget(legend_checkbox)
 
+    # Human-in-the-loop QB verification: jump to the snap frame and let the
+    # coach click the QB. One click anchors the whole formation read.
+    verify_qb_button = QPushButton("Verify QB")
+    verify_qb_button.setFixedSize(70, 20)
+    verify_qb_button.setCheckable(True)
+    verify_qb_button.setChecked(False)
+    verify_qb_button.setToolTip("Click the QB at the snap frame to verify it (anchors the formation read)")
+    verify_qb_button.setStyleSheet("""
+        QPushButton {
+            background-color: transparent;
+            border: none;
+            color: white;
+            padding: 4px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: #404040;
+        }
+        QPushButton:pressed {
+            background-color: #505050;
+        }
+        QPushButton:checked {
+            background-color: #d4a017;
+        }
+    """)
+    verify_qb_button.clicked.connect(lambda: toggle_qb_verify_mode(dock.parent(), verify_qb_button))
+    layout.addWidget(verify_qb_button)
 
     title_bar.setLayout(layout)
     return title_bar
@@ -1390,6 +1474,26 @@ def set_current_video_path(parent, video_path):
         if getattr(parent.custom_video, "show_offense_selection", False):
             _compute_offense_selection_for_current_video(parent)
 
+    # Load any saved human QB verification for this clip (overlay state), and
+    # always leave verify mode when switching clips.
+    if hasattr(parent, 'custom_video'):
+        try:
+            _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+            _fp = os.path.join(_base, "formations")
+            if _fp not in sys.path:
+                sys.path.append(_fp)
+            import verified_store
+            _vname = os.path.splitext(os.path.basename(video_path))[0]
+            _fname = os.path.basename(parent.current_folder.rstrip("/\\")) if getattr(parent, "current_folder", None) else None
+            v = verified_store.load_verified(_vname, _fname, get_cache_dir()) if _fname else None
+            parent.custom_video.verified_qb = (v or {}).get("qb")
+        except Exception:
+            parent.custom_video.verified_qb = None
+        parent.custom_video.qb_verify_mode = False
+        parent.custom_video.unsetCursor()
+        if getattr(parent, "qb_verify_button", None):
+            parent.qb_verify_button.setChecked(False)
+
     # Load the recognized offense formation for the corner overlay.
     _load_formation_label_for_current_video(parent)
 
@@ -1419,15 +1523,23 @@ def _load_formation_label_for_current_video(parent):
         video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
         folder_name = os.path.basename(parent.current_folder.rstrip("/\\"))
 
-        # --- Determined formation from the template matcher (the CSV method) --- #
+        # --- Determined formation: ensemble predictor (template matcher x
+        # playbook prior x line-count structure; ~2x the raw matcher's top-1
+        # accuracy), falling back to the raw matcher if it fails. ----------- #
         model_form, model_conf, reliable = "", None, True
+        res = None
         try:
             _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
             for _p in (os.path.join(_base, "formations"), os.path.join(_base, "scripts")):
                 if _p not in sys.path:
                     sys.path.append(_p)
-            import template_matcher as _tm
-            res = _tm.recognize_from_cache(video_name, folder_name, get_cache_dir())
+            try:
+                import formation_predictor as _fp
+                res = _fp.predict(video_name, folder_name, get_cache_dir())
+            except Exception as e:
+                print(f"[FORMATION] ensemble unavailable, using raw matcher: {e}")
+                import template_matcher as _tm
+                res = _tm.recognize_from_cache(video_name, folder_name, get_cache_dir())
             if res and res.get("formation"):
                 model_form = str(res["formation"])
                 model_conf = res.get("score")
@@ -1435,22 +1547,53 @@ def _load_formation_label_for_current_video(parent):
         except Exception as e:
             print(f"[FORMATION] matcher unavailable: {e}")
 
-        # --- Coach ground-truth label from the data CSV, if charted ----------- #
+        # Push the ranked recommendations to the formation choice panel (system
+        # pick marked + top-3 + dropdown). ranking is template-name list (ensemble)
+        # or (name, score) tuples (raw matcher) -- normalize to a key list.
+        try:
+            panel = getattr(parent, "formation_panel", None)
+            if panel is not None:
+                raw_rank = (res or {}).get("ranking") or []
+                rank_keys = [r[0] if isinstance(r, (list, tuple)) else r for r in raw_rank]
+                panel.set_choices((res or {}).get("formation"), model_conf,
+                                  rank_keys, video_name, folder_name)
+        except Exception as e:
+            print(f"[FORMATION PANEL] update failed: {e}")
+
+        # --- Coach ground-truth label ----------------------------------------- #
+        # Primary source: the coach's breakdown.xlsx (row N = Wide - Clip N,
+        # OFF FORM column -- confirmed with the coach). Fallback: hand-label
+        # columns in the data CSV. NOTE: the CSV's own OFF FORM column is the
+        # MODEL's prediction, never the coach -- it must not be read here.
         coach_form = ""
         try:
-            data_csv = os.path.join(get_cache_dir(), folder_name, f"{folder_name}_data.csv")
-            if os.path.exists(data_csv):
-                df = pd.read_csv(data_csv)
-                if "CLIP NAME" in df.columns:
-                    row = df.loc[df["CLIP NAME"].astype(str) == video_name]
-                    if not row.empty:
-                        for col in ("COACH FORM", "FORMATION", "OFF FORM"):
-                            v = row.iloc[0].get(col) if col in row.columns else None
-                            if v is not None and not pd.isna(v) and str(v).strip():
-                                coach_form = str(v).strip()
-                                break
-        except Exception:
-            pass
+            import re as _re
+            m = _re.search(r"Clip (\d+)", video_name)
+            bd_xlsx = os.path.join(get_project_root(), "data", folder_name, "breakdown.xlsx")
+            if m and os.path.exists(bd_xlsx):
+                if not hasattr(parent, "_breakdown_offform_cache"):
+                    parent._breakdown_offform_cache = pd.read_excel(bd_xlsx)["OFF FORM"].tolist()
+                n = int(m.group(1))
+                col = parent._breakdown_offform_cache
+                if 1 <= n <= len(col) and isinstance(col[n - 1], str) and col[n - 1].strip():
+                    coach_form = col[n - 1].strip()
+        except Exception as e:
+            print(f"[FORMATION] breakdown label unavailable: {e}")
+        if not coach_form:
+            try:
+                data_csv = os.path.join(get_cache_dir(), folder_name, f"{folder_name}_data.csv")
+                if os.path.exists(data_csv):
+                    df = pd.read_csv(data_csv)
+                    if "CLIP NAME" in df.columns:
+                        row = df.loc[df["CLIP NAME"].astype(str) == video_name]
+                        if not row.empty:
+                            for col in ("COACH FORM", "FORMATION"):
+                                v = row.iloc[0].get(col) if col in row.columns else None
+                                if v is not None and not pd.isna(v) and str(v).strip():
+                                    coach_form = str(v).strip()
+                                    break
+            except Exception:
+                pass
 
         # The virtual-field info panel shows the same predicted formation.
         if hasattr(parent, "virtual_field"):
@@ -1948,6 +2091,170 @@ def toggle_offense_selection(parent, button):
     if hasattr(parent, 'virtual_field'):
         parent.virtual_field.offense_selection_mode = button.isChecked()
         parent.virtual_field.update()
+
+def toggle_qb_verify_mode(parent, button):
+    """QB verification mode: jump to the snap frame, switch to a crosshair,
+    and let the coach click the QB on the video. One click anchors the whole
+    formation read (attack direction, team split, reliability) forever."""
+    parent.qb_verify_button = button
+    cv = getattr(parent, "custom_video", None)
+    if cv is None:
+        button.setChecked(False)
+        return
+
+    if not button.isChecked():
+        cv.qb_verify_mode = False
+        cv.unsetCursor()
+        return
+
+    if not getattr(parent, "current_video_path", None) or not getattr(parent, "current_folder", None):
+        print("[QB VERIFY] no video loaded")
+        button.setChecked(False)
+        return
+
+    # Pause and jump to the snap frame -- the moment the verification is for.
+    if cv.is_playing:
+        cv.toggle_playback()
+    video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
+    folder_name = os.path.basename(parent.current_folder.rstrip("/\\"))
+    snap_file = os.path.join(get_cache_dir(), folder_name, "snap_detection",
+                             f"{video_name}_snap_detection.json")
+    try:
+        with open(snap_file) as f:
+            snaps = (json.load(f).get("snaps") or [])
+        snap_frame = int(snaps[0]["frame"]) if snaps else None
+    except Exception:
+        snap_frame = None
+    if snap_frame is not None:
+        cv.current_frame = snap_frame
+        cv.update()
+        cv.update_virtual_field()
+        cv.update_parent_controls()
+    else:
+        print("[QB VERIFY] no snap frame cached -- verify on the current frame")
+
+    cv.qb_verify_mode = True
+    cv.setCursor(Qt.CrossCursor)
+    print("[QB VERIFY] mode ON -- click the QB on the video")
+
+
+def record_qb_verification(parent, frame_number, vx, vy):
+    """Persist a human QB click and refresh everything that anchors on it:
+    verified JSON + flywheel CSV -> formation re-read (cache only, no
+    pipeline) -> data-sheet row -> video + virtual-field overlays."""
+    try:
+        if not getattr(parent, "current_video_path", None) or not getattr(parent, "current_folder", None):
+            return
+        video_name = os.path.splitext(os.path.basename(parent.current_video_path))[0]
+        folder_name = os.path.basename(parent.current_folder.rstrip("/\\"))
+        base_cache = get_cache_dir()
+
+        _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        for _p in (os.path.join(_base, "formations"), os.path.join(_base, "scripts")):
+            if _p not in sys.path:
+                sys.path.append(_p)
+        import verified_store
+        import line_count_classifier as lcc
+
+        # Snap the click to the nearest detection centre (ANY class -- the
+        # detector may have mislabeled the QB), preferring the clicked frame,
+        # then nearby frames.
+        qb = {"frame": int(frame_number), "x": float(vx), "y": float(vy),
+              "snapped": False, "track_id": None, "detected_class": None, "bbox": None}
+        tol = max(40.0, 0.05 * (parent.custom_video.frame_width or 1280))
+        pos_p = os.path.join(base_cache, folder_name, "positions",
+                             f"{video_name}_position.json")
+        try:
+            with open(pos_p) as f:
+                frames = {fr.get("frame_number"): fr.get("detections", [])
+                          for fr in json.load(f).get("frames", [])}
+            for off in (0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5):
+                dets = frames.get(int(frame_number) + off)
+                if not dets:
+                    continue
+                best, best_d = None, tol * tol
+                for d in dets:
+                    b = d.get("bbox") or {}
+                    cx, cy = b.get("center_x"), b.get("center_y")
+                    if cx is None:
+                        continue
+                    dd = (cx - vx) ** 2 + (cy - vy) ** 2
+                    if dd < best_d:
+                        best_d, best = dd, d
+                if best is not None:
+                    b = best.get("bbox") or {}
+                    qb.update({"snapped": True, "x": float(b["center_x"]),
+                               "y": float(b["center_y"]),
+                               "track_id": best.get("track_id"),
+                               "detected_class": best.get("class"), "bbox": b})
+                    break
+        except Exception as e:
+            print(f"[QB VERIFY] no detection snap ({e}) -- raw point saved")
+
+        verified_store.save_qb_verification(video_name, folder_name, base_cache, qb)
+        verified_store.append_training_label(folder_name, base_cache, {
+            "folder": folder_name, "clip": video_name, "frame": qb["frame"],
+            "x": qb["x"], "y": qb["y"], "matched_track_id": qb["track_id"],
+            "matched_class": qb["detected_class"], "verified_at": qb.get("verified_at", "")})
+
+        # Cheap recompute from the cache -- the verified QB anchors the read.
+        res = lcc.recognize_from_cache(video_name, folder_name, base_cache)
+        if res.get("on_line_count") is not None:
+            lcc.save_snapshot(res, video_name, folder_name, base_cache)
+        _update_sheet_row_after_verification(parent, folder_name, video_name, res)
+
+        # Refresh overlays everywhere.
+        parent.custom_video.verified_qb = qb
+        _load_formation_label_for_current_video(parent)
+        from virtualField import load_formation_snapshot_for_virtual_field
+        load_formation_snapshot_for_virtual_field(parent, video_name, parent.current_folder)
+        parent.custom_video.update()
+
+        # One click = done: leave verify mode.
+        parent.custom_video.qb_verify_mode = False
+        parent.custom_video.unsetCursor()
+        if getattr(parent, "qb_verify_button", None):
+            parent.qb_verify_button.setChecked(False)
+        print(f"[QB VERIFY] {video_name}: QB verified at frame {qb['frame']} "
+              f"({qb['x']:.0f},{qb['y']:.0f}) snapped={qb['snapped']} "
+              f"class_was={qb['detected_class']} -> read reliable={res.get('reliable')}")
+    except Exception as e:
+        import traceback
+        print(f"[QB VERIFY] failed: {e}")
+        traceback.print_exc()
+
+
+def _update_sheet_row_after_verification(parent, folder_name, video_name, res):
+    """Mark the clip QB-verified in the data sheet and refresh its FRONT
+    columns from the re-anchored read."""
+    try:
+        csv_p = os.path.join(get_cache_dir(), folder_name, f"{folder_name}_data.csv")
+        if not os.path.exists(csv_p):
+            return
+        df = pd.read_csv(csv_p)
+        if "CLIP NAME" not in df.columns:
+            return
+        mask = df["CLIP NAME"].astype(str) == video_name
+        if not mask.any():
+            return
+        updates = {"QB VERIFIED": "✓"}
+        if res and res.get("on_line_count") is not None:
+            updates.update({"FRONT COUNT": res.get("on_line_count"),
+                            "FRONT STRENGTH": res.get("strength"),
+                            "FRONT RELIABLE": res.get("reliable"),
+                            "ATTACK DIR": res.get("attack_dir_x")})
+        for col, val in updates.items():
+            if col not in df.columns:
+                df[col] = ""
+            df.loc[mask, col] = val
+        df.to_csv(csv_p, index=False)
+        if hasattr(parent, "load_csv_file"):
+            parent.load_csv_file(csv_p)
+            from dataSheet import select_row_for_video
+            select_row_for_video(parent, video_name)
+    except Exception as e:
+        print(f"[QB VERIFY] sheet update skipped: {e}")
+
 
 def toggle_yard_marker_boxes(parent, button):
     """Toggle yard marker bounding box visibility - wrapper for unified function"""

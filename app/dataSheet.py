@@ -1,9 +1,27 @@
 from PySide6.QtWidgets import QDockWidget, QTableView, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QHBoxLayout, QLabel, QPushButton, QFileDialog, QMessageBox
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QColor
 import pandas as pd
 import os
 import re
+
+
+def _compute_clip_status(base_dir, clip_name):
+    """Return processing status for a clip by checking what's on disk.
+
+    'full'    -> homography output exists (clip is fully trained)
+    'partial' -> detection exists but no homography (interrupted / half-done)
+    'none'    -> nothing on disk yet
+    """
+    if not base_dir:
+        return "none"
+    homography = os.path.join(base_dir, "homography", f"{clip_name}_normalized_positions.json")
+    detection = os.path.join(base_dir, "players", f"{clip_name}_detection.json")
+    if os.path.exists(homography):
+        return "full"
+    if os.path.exists(detection):
+        return "partial"
+    return "none"
 
 class CSVTableModel(QAbstractTableModel):
     def __init__(self, data=None, parent=None):
@@ -13,6 +31,10 @@ class CSVTableModel(QAbstractTableModel):
         self.video_time_column = None
         self.empty_message = "No data available."
         self.has_unsaved_changes = False
+        # Per-clip processing status ({clip_name: 'full'|'partial'|'none'}) and the
+        # cache folder it is read from. Drives the trained/untrained colouring.
+        self.processed_status = {}
+        self.status_dir = None
 
     def rowCount(self, parent=QModelIndex()):
         if self._data.empty:
@@ -44,6 +66,17 @@ class CSVTableModel(QAbstractTableModel):
         self._data.to_csv(path, index=False)
         self.has_unsaved_changes = False
 
+    def _is_clip_column(self, column):
+        return (
+            not self._data.empty
+            and self.video_clip_column is not None
+            and self._data.columns[column] == self.video_clip_column
+        )
+
+    def _row_status(self, row):
+        clip = str(self._data.iloc[row][self.video_clip_column]).strip()
+        return self.processed_status.get(clip, "none")
+
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
@@ -54,9 +87,49 @@ class CSVTableModel(QAbstractTableModel):
                 if index.row() == 0 and index.column() == 0:
                     return self.empty_message
                 return None
-            return str(self._data.iloc[index.row(), index.column()])
+            value = str(self._data.iloc[index.row(), index.column()])
+            # Prefix the clip name with a marker so trained clips are obvious
+            # even without colour (e.g. for colour-blind users / screenshots).
+            if self._is_clip_column(index.column()):
+                status = self._row_status(index.row())
+                if status == "full":
+                    return f"✓  {value}"
+                if status == "partial":
+                    return f"⚠  {value}"
+            return value
+
+        if role == Qt.BackgroundRole and self._is_clip_column(index.column()):
+            status = self._row_status(index.row())
+            if status == "full":
+                return QColor(198, 239, 206)   # light green = trained
+            if status == "partial":
+                return QColor(255, 235, 156)   # light yellow = half-done
+            return None
+
+        if role == Qt.ToolTipRole and self._is_clip_column(index.column()):
+            return {
+                "full": "Processed ✓  (homography ready — no need to re-batch)",
+                "partial": "Partial — detection only, still needs homography",
+                "none": "Not processed yet",
+            }[self._row_status(index.row())]
 
         return None
+
+    def set_status_dir(self, status_dir):
+        """Point the model at a cache folder and recompute clip statuses."""
+        self.status_dir = status_dir
+        self.refresh_processed_status()
+
+    def refresh_processed_status(self):
+        """Rescan the cache folder and repaint the trained/untrained colours."""
+        self.processed_status = {}
+        if not self._data.empty and self.video_clip_column and self.status_dir:
+            for clip in self._data[self.video_clip_column].astype(str):
+                name = clip.strip()
+                self.processed_status[name] = _compute_clip_status(self.status_dir, name)
+            top = self.index(0, 0)
+            bottom = self.index(self.rowCount() - 1, self.columnCount() - 1)
+            self.dataChanged.emit(top, bottom, [Qt.DisplayRole, Qt.BackgroundRole, Qt.ToolTipRole])
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
@@ -159,18 +232,75 @@ def create_data_sheet_dock(parent):
         lambda: parent.save_stats_btn.setEnabled(False)
     )
     
+    # Legend bar: explains the clip colours + shows live trained counts so the
+    # whole panel is self-explanatory at a glance.
+    parent.sheet_status_legend = QLabel()
+    parent.sheet_status_legend.setTextFormat(Qt.RichText)
+    parent.sheet_status_legend.setStyleSheet(
+        "QLabel { background-color: #2b2b2b; color: #dddddd; padding: 4px 8px;"
+        " border-top: 1px solid #555555; font-size: 11px; }"
+    )
+    _set_legend_text(parent.sheet_status_legend, 0, 0, 0)
+
     layout.addWidget(parent.tableView)
+    layout.addWidget(parent.sheet_status_legend)
     main_widget.setLayout(layout)
     dock.setWidget(main_widget)
-    
+
     # Add method to parent
     parent.load_csv_file = lambda csv_path: load_csv_file(parent, csv_path)
-    
+
     return dock
+
+
+def _set_legend_text(label, trained, partial, untrained):
+    """Render the colour legend + counts into the legend label."""
+    def chip(bg, fg, text):
+        return (
+            f"<span style='background-color:{bg}; color:{fg};"
+            f" padding:1px 6px; border-radius:3px;'>{text}</span>"
+        )
+    label.setText(
+        chip("#c6efce", "#1e5631", f"✓ Trained: {trained}")
+        + "&nbsp;&nbsp;"
+        + chip("#ffeb9c", "#7a5b00", f"⚠ Half-done: {partial}")
+        + "&nbsp;&nbsp;"
+        + chip("#3a3a3a", "#dddddd", f"○ Not processed: {untrained}")
+    )
+
+
+def update_status_legend(parent):
+    """Refresh the legend counts from the model's current clip statuses."""
+    label = getattr(parent, "sheet_status_legend", None)
+    if label is None:
+        return
+    statuses = getattr(parent.csv_model, "processed_status", {}) or {}
+    values = list(statuses.values())
+    trained = values.count("full")
+    partial = values.count("partial")
+    # Untrained = every clip row that isn't trained/partial (covers clips with
+    # no status entry yet, e.g. before the cache folder is known).
+    total_rows = 0 if parent.csv_model._data.empty else len(parent.csv_model._data)
+    untrained = max(0, total_rows - trained - partial)
+    _set_legend_text(label, trained, partial, untrained)
 
 def load_csv_file(parent, csv_path):
     """Load a CSV file into the data sheet"""
     if parent.csv_model.load_csv(csv_path):
+        # Point the model at this folder's cache so each clip is coloured by
+        # whether it's already trained (homography on disk) -- lets you batch
+        # only the untrained clips instead of redoing everything.
+        status_dir = None
+        try:
+            current_folder = getattr(parent, "current_folder", None)
+            if current_folder:
+                from fileAccess import get_cache_dir
+                folder_name = os.path.basename(current_folder.rstrip("/\\"))
+                status_dir = os.path.join(get_cache_dir(), folder_name)
+        except Exception as e:
+            print(f"Could not resolve cache status dir: {e}")
+        parent.csv_model.set_status_dir(status_dir)
+        update_status_legend(parent)
         parent.tableView.resizeColumnsToContents()
         parent.current_csv_path = csv_path  # Store current CSV path for refresh
         return True

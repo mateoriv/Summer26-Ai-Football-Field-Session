@@ -1,54 +1,275 @@
 clip,actual,gt_bucket,gt_shape,pred_bucket,pred_shape,reliable,read,reason
-Wide - Clip 933,DALLAS Y OFF,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 8.3yd downfield of LOS
-Wide - Clip 675,DALLAS Y OFF,2x2,BALANCED,3x1,ONE-SIDED,False,yes,
-Wide - Clip 119,DALLAS Y OFF,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 814,DALLAS Y OFF,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 275,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
-Wide - Clip 243,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 7.9yd downfield of LOS
+Wide - Clip 001,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 002,DALLAS Y OFF,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 003,DALLAS Y OFF,2x2,BALANCED,3x1,ONE-SIDED,False,yes,
 Wide - Clip 004,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
-Wide - Clip 288,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
-Wide - Clip 176,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 054,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
-Wide - Clip 245,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
-Wide - Clip 330,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
-Wide - Clip 238,DETROIT,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
-Wide - Clip 060,EMPTY,,,3x1,ONE-SIDED,True,yes,
-Wide - Clip 341,EMPTY,,,2x2,ONE-SIDED,True,yes,
-Wide - Clip 854,TREY Y OFF,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
-Wide - Clip 250,TREY Y OFF,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
-Wide - Clip 324,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
-Wide - Clip 110,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
-Wide - Clip 377,TREY Y OFF,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
-Wide - Clip 483,TREY Y OFF,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
-Wide - Clip 114,TRIPS,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
-Wide - Clip 117,TRIPS,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 188,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 130,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 047,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
-Wide - Clip 1002,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 1009,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 005,EMPTY,,,2x2,ONE-SIDED,False,yes,
+Wide - Clip 006,EMPTY,,,,,False,rejected,bad projection: 6 player(s) up to 52.8yd downfield of LOS
+Wide - Clip 007,EMPTY,,,2x2,ONE-SIDED,True,yes,
+Wide - Clip 010,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 011,TREY Y OFF,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 012,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 013,TRIPS,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 014,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
 Wide - Clip 015,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
-Wide - Clip 1023,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
-Wide - Clip 1022,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 016,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 017,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
 Wide - Clip 021,TREY Y OFF TITE,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
-Wide - Clip 491,DENVER U OFF,2x2,BALANCED,2x2,BALANCED,False,yes,
-Wide - Clip 564,DENVER,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
-Wide - Clip 555,DENVER,2x2,BALANCED,2x2,BALANCED,True,yes,
-Wide - Clip 590,DENVER,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
-Wide - Clip 470,DENVER,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
-Wide - Clip 278,DALLAS,2x2,BALANCED,3x1,ONE-SIDED,False,yes,
-Wide - Clip 361,DALLAS,2x2,BALANCED,,,False,rejected,bad projection: 1 player(s) up to 11.2yd downfield of LOS
-Wide - Clip 266,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 388,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 426,SLOT,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 028,TREY Y OFF,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 029,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 038,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 039,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 5 player(s) up to 6.7yd downfield of LOS
+Wide - Clip 047,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 049,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
+Wide - Clip 054,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 060,EMPTY,,,3x1,ONE-SIDED,True,yes,
+Wide - Clip 061,EMPTY,,,,,False,rejected,no valid homography near snap
 Wide - Clip 069,TREY WG,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
-Wide - Clip 305,TREY,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 1012,TREY,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 537,SLOT OPEN,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 656,SLOT OPEN,2x2,BALANCED,2x2,BALANCED,True,yes,
-Wide - Clip 1021,DALLAS WG,2x2,BALANCED,2x2,BALANCED,False,yes,
-Wide - Clip 321,DALLAS WG,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 075,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 100,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 101,DALLAS Y OFF,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 110,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 114,TREY,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 115,DALLAS Y OFF,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 117,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 119,TRIPS,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 129,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 6 player(s) up to 32.7yd downfield of LOS
+Wide - Clip 130,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 158,TRIPS,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 6.9yd downfield of LOS
+Wide - Clip 159,TREY,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 160,TREY,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 161,SLOT,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 162,TREY,3x1,ONE-SIDED,,,False,rejected,bad projection: 6 player(s) up to 17.5yd downfield of LOS
+Wide - Clip 163,SLOT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 164,DALLAS,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 165,SLOT,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 166,TRIPS,3x1,ONE-SIDED,,,False,rejected,bad projection: 7 player(s) up to 23.7yd downfield of LOS
+Wide - Clip 167,DALLAS,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 170,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 171,DENVER,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 173,DETROIT,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 174,TRIPS,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 175,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 176,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 177,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 188,DENVER,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 189,DETROIT,2x2,BALANCED,,,False,rejected,only 3 offense players
+Wide - Clip 198,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 7 player(s) up to 17.5yd downfield of LOS
+Wide - Clip 199,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 200,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 201,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 202,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 203,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 204,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 205,SLOT OPEN,2x2,BALANCED,,,False,rejected,bad projection: 5 player(s) up to 13.1yd downfield of LOS
+Wide - Clip 206,DENVER YU OFF,,,3x1,ONE-SIDED,False,yes,
+Wide - Clip 207,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 210,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 9.4yd downfield of LOS
+Wide - Clip 211,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 2.9yd downfield of LOS
+Wide - Clip 212,TREY,3x1,ONE-SIDED,,,False,rejected,bad projection: 6 player(s) up to 9.6yd downfield of LOS
+Wide - Clip 213,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 2 player(s) up to 15.6yd downfield of LOS
+Wide - Clip 214,DALLAS,2x2,BALANCED,,,False,rejected,bad projection: 4 player(s) up to 9.9yd downfield of LOS
+Wide - Clip 215,DETROIT,2x2,BALANCED,,,False,rejected,no valid homography near snap
+Wide - Clip 216,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 5 player(s) up to 12.5yd downfield of LOS
+Wide - Clip 217,DALLAS,2x2,BALANCED,,,False,rejected,bad projection: 6 player(s) up to 14.5yd downfield of LOS
+Wide - Clip 225,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 228,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 229,TREY,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 231,DALLAS Y OFF,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 238,DENVER,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 239,TREY,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 12.8yd downfield of LOS
+Wide - Clip 243,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 7.9yd downfield of LOS
+Wide - Clip 245,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 250,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 263,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 266,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 275,TREY,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
+Wide - Clip 277,TREY Y OFF TITE,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 278,TRIPS,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 288,DALLAS,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 302,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 303,TREY,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 305,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 316,TREY,3x1,ONE-SIDED,,,False,rejected,bad projection: 4 player(s) up to 17.0yd downfield of LOS
+Wide - Clip 317,TREY,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 321,TREY,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 324,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 330,DALLAS Y OFF,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 334,TREY Y OFF,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 341,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 348,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 349,DETROIT,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 358,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 359,TREY Y OFF,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 360,DALLAS Y OFF,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 361,DALLAS Y OFF,2x2,BALANCED,,,False,rejected,bad projection: 1 player(s) up to 11.2yd downfield of LOS
+Wide - Clip 362,DALLAS Y OFF,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 363,DALLAS Y OFF,2x2,BALANCED,,,False,rejected,bad projection: 5 player(s) up to 4.2yd downfield of LOS
+Wide - Clip 364,TREY TITE,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 365,TREY TITE,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 366,SLOT OPEN,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 367,TREY TITE,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
+Wide - Clip 370,TREY,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 371,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 372,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 373,TREY Y OFF TITE,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 6.5yd downfield of LOS
+Wide - Clip 374,TRIPS,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 375,TREY WG,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
+Wide - Clip 377,DALLAS WG,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 388,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 389,DALLAS,2x2,BALANCED,,,False,rejected,bad projection: 9 player(s) up to 17.2yd downfield of LOS
+Wide - Clip 398,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 399,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 9.8yd downfield of LOS
+Wide - Clip 400,SLOT OPEN,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 401,DENVER YU OFF,,,2x2,ONE-SIDED,False,yes,
+Wide - Clip 402,TRIPS,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 403,TRIPS,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 404,DENVER,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 405,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 10 player(s) up to 14.7yd downfield of LOS
+Wide - Clip 406,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 2 player(s) up to 12.9yd downfield of LOS
+Wide - Clip 407,TREY WG,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 410,TREY Y OFF,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 411,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 412,DALLAS Y OFF,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 413,TREY Y OFF,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 426,SLOT,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 428,TRIPS,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 438,DALLAS,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 10.7yd downfield of LOS
+Wide - Clip 439,TREY TITE,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 458,DALLAS WG,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 459,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 464,DENVER,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 465,DALLAS WG,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 470,DENVER,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 471,DENVER,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
 Wide - Clip 474,DALLAS WG,2x2,BALANCED,,,False,rejected,bad projection: 5 player(s) up to 12.4yd downfield of LOS
-Wide - Clip 410,DENVER YU OFF,,,3x1,ONE-SIDED,False,yes,
-Wide - Clip 778,EMPTY TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
-Wide - Clip 851,EMPTY TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 483,TREY Y OFF,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 491,DENVER U OFF,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 505,TRIPS,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
+Wide - Clip 511,TREY Y OFF TITE,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 537,SLOT OPEN,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 539,SLOT OPEN,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 548,DALLAS WG,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 549,DENVER,2x2,BALANCED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 555,DENVER,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 558,TREY TITE,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 559,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 560,DENVER,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 561,SLOT OPEN,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 562,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 563,DALLAS,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 564,DENVER,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 565,DENVER YU OFF,,,3x1,ONE-SIDED,False,yes,
+Wide - Clip 566,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 567,DENVER,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 588,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 15.3yd downfield of LOS
+Wide - Clip 589,TREY TITE,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 590,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 598,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 599,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 600,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 601,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 5 player(s) up to 9.4yd downfield of LOS
+Wide - Clip 602,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 603,TREY Y OFF,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
+Wide - Clip 604,TRIPS,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 605,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 606,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 607,DETROIT,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 610,TREY,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
+Wide - Clip 611,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 6 player(s) up to 10.8yd downfield of LOS
+Wide - Clip 612,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 613,DALLAS,2x2,BALANCED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 614,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 615,TREY WG,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 616,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,only 2 offense players
+Wide - Clip 617,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 11.0yd downfield of LOS
+Wide - Clip 638,TREY,3x1,ONE-SIDED,,,False,rejected,bad projection: 4 player(s) up to 13.6yd downfield of LOS
+Wide - Clip 639,TREY Y OFF,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 656,DALLAS WING,,,2x2,BALANCED,True,yes,
+Wide - Clip 675,DETROIT,2x2,BALANCED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 707,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 748,DALLAS,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 749,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 770,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 771,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 772,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 31.6yd downfield of LOS
+Wide - Clip 773,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 774,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 2 player(s) up to 19.7yd downfield of LOS
+Wide - Clip 775,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 776,DALLAS Y OFF,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 777,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 778,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 788,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 789,DALLAS WING,,,2x2,BALANCED,False,yes,
+Wide - Clip 798,TREY Y OFF,3x1,ONE-SIDED,2x2,BALANCED,True,yes,
+Wide - Clip 799,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 5.9yd downfield of LOS
+Wide - Clip 808,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 1 player(s) up to 29.5yd downfield of LOS
+Wide - Clip 809,DETROIT,2x2,BALANCED,,,False,rejected,no valid homography near snap
+Wide - Clip 814,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 818,DETROIT,2x2,BALANCED,,,False,rejected,no valid homography near snap
+Wide - Clip 819,DALLAS Y OFF,2x2,BALANCED,,,False,rejected,bad projection: 4 player(s) up to 14.4yd downfield of LOS
+Wide - Clip 820,DETROIT,2x2,BALANCED,,,False,rejected,no valid homography near snap
+Wide - Clip 821,EMPTY TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 1 player(s) up to 14.3yd downfield of LOS
+Wide - Clip 822,EMPTY TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 10 player(s) up to 39.1yd downfield of LOS
+Wide - Clip 823,DALLAS,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 824,TREY,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 825,DALLAS Y OFF,2x2,BALANCED,,,False,rejected,bad projection: 1 player(s) up to 11.5yd downfield of LOS
+Wide - Clip 826,DALLAS Y OFF,2x2,BALANCED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 827,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 830,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 832,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 6 player(s) up to 16.7yd downfield of LOS
+Wide - Clip 833,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 834,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 835,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 30.6yd downfield of LOS
+Wide - Clip 836,TREY,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 837,TREY Y OFF,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 840,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 11.3yd downfield of LOS
+Wide - Clip 841,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 6 player(s) up to 36.3yd downfield of LOS
+Wide - Clip 851,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 854,TREY Y OFF,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 855,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 863,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 3 player(s) up to 8.4yd downfield of LOS
+Wide - Clip 868,DALLAS WG,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 869,TREY Y OFF TITE,3x1,ONE-SIDED,,,False,rejected,bad projection: 2 player(s) up to 12.8yd downfield of LOS
+Wide - Clip 883,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 897,DETROIT,2x2,BALANCED,2x2,BALANCED,False,yes,
+Wide - Clip 908,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 920,SLOT OPEN,2x2,BALANCED,,,False,rejected,bad projection: 1 player(s) up to 10.8yd downfield of LOS
+Wide - Clip 933,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 8.3yd downfield of LOS
+Wide - Clip 934,DETROIT,2x2,BALANCED,2x2,BALANCED,True,yes,
+Wide - Clip 940,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 941,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 2 player(s) up to 12.4yd downfield of LOS
+Wide - Clip 942,TRIPS OPEN,3x1,ONE-SIDED,3x1,ONE-SIDED,False,yes,
+Wide - Clip 943,TREY TITE,3x1,ONE-SIDED,,,False,rejected,bad projection: 5 player(s) up to 12.5yd downfield of LOS
+Wide - Clip 944,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 945,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,True,yes,
+Wide - Clip 946,TRIPS,3x1,ONE-SIDED,3x1,ONE-SIDED,True,yes,
+Wide - Clip 947,DENVER Y OFF,2x2,BALANCED,,,False,rejected,bad projection: 5 player(s) up to 17.9yd downfield of LOS
+Wide - Clip 950,TREY WING,,,,,False,rejected,bad projection: 8 player(s) up to 10.9yd downfield of LOS
+Wide - Clip 951,DALLAS WING,,,3x1,ONE-SIDED,True,yes,
+Wide - Clip 954,DALLAS WING,,,2x2,BALANCED,False,yes,
+Wide - Clip 955,DENVER Y OFF,2x2,BALANCED,,,False,rejected,bad projection: 11 player(s) up to 15.5yd downfield of LOS
+Wide - Clip 956,TREY WING,,,2x2,ONE-SIDED,True,yes,
+Wide - Clip 957,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,bad projection: 2 player(s) up to 10.2yd downfield of LOS
+Wide - Clip 978,DENVER YU OFF,,,,,False,rejected,no valid homography near snap
+Wide - Clip 979,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 8 player(s) up to 16.4yd downfield of LOS
+Wide - Clip 981,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 982,TRIPS,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 983,DALLAS,2x2,BALANCED,,,False,rejected,bad projection: 3 player(s) up to 11.2yd downfield of LOS
+Wide - Clip 984,TREY Y OFF,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 986,TREY,3x1,ONE-SIDED,,,False,rejected,no valid homography near snap
+Wide - Clip 987,DETROIT,2x2,BALANCED,,,False,rejected,bad projection: 6 player(s) up to 20.3yd downfield of LOS
+Wide - Clip 991,TRIPS OPEN,3x1,ONE-SIDED,,,False,rejected,bad projection: 8 player(s) up to 33.9yd downfield of LOS
+Wide - Clip 993,TRIPS,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 994,TREY WING,,,,,False,rejected,no valid homography near snap
+Wide - Clip 995,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 996,TREY WING,,,,,False,rejected,no valid homography near snap
+Wide - Clip 997,DALLAS WING,,,,,False,rejected,no valid homography near snap
+Wide - Clip 1002,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 1008,TRIPS OPEN,3x1,ONE-SIDED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 1009,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 1012,DETROIT,2x2,BALANCED,2x2,ONE-SIDED,False,yes,
+Wide - Clip 1020,TREY Y OFF TITE,3x1,ONE-SIDED,,,False,rejected,bad projection: 6 player(s) up to 15.3yd downfield of LOS
+Wide - Clip 1021,TRIPS OPEN,3x1,ONE-SIDED,2x2,BALANCED,False,yes,
+Wide - Clip 1022,DENVER YU OFF,,,2x2,ONE-SIDED,True,yes,
+Wide - Clip 1023,EMPTY,,,2x2,BALANCED,False,yes,
