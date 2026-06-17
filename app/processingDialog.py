@@ -13,6 +13,7 @@ from PySide6.QtGui import QFont, QIcon, QTextCursor
 from video import load_snap_detection_data
 import subprocess
 import os
+import json
 import sys
 import json
 import time
@@ -42,36 +43,12 @@ def get_resource_path(*relative_parts):
 
 
 def get_python_executable():
-    """Get the correct Python executable for the current platform
-    
-    When running as a PyInstaller executable, returns sys.executable.
-    When running in development, returns the system Python executable.
+    """Get the correct Python executable for the current platform.
+
+    Always returns sys.executable so that scripts run with the same
+    interpreter (and venv) that launched the application.
     """
-    # If running as PyInstaller bundle, use sys.executable
-    if hasattr(sys, "_MEIPASS") or getattr(sys, 'frozen', False):
-        return sys.executable
-    
-    # Running in development mode - use system Python
-    if sys.platform.startswith('win'):
-        # On Windows, try 'python' first, then 'python3'
-        for cmd in ['python', 'python3']:
-            try:
-                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    return cmd
-            except FileNotFoundError:
-                continue
-        return 'python'  # Fallback
-    else:
-        # On Unix-like systems, try 'python3' first, then 'python'
-        for cmd in ['python3', 'python']:
-            try:
-                result = subprocess.run([cmd, '--version'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    return cmd
-            except FileNotFoundError:
-                continue
-        return 'python3'  # Fallback
+    return sys.executable
 
 def build_script_command(script_path, *args):
     """Build a command to run a Python script, handling PyInstaller bundles correctly.
@@ -235,31 +212,21 @@ class ProcessingWorker(QThread):
             prerequisites_exist = os.path.exists(homography_file) and os.path.exists(snap_file)
             if not prerequisites_exist:
                 return False
+            # If snap detection found no snaps, static process can never run — treat as done
+            try:
+                with open(snap_file, 'r') as f:
+                    snap_json = json.load(f)
+                if not snap_json.get('snaps'):
+                    return True
+            except Exception:
+                pass
             # If prerequisites exist, check if CSV has been augmented
             return self.is_csv_row_augmented()
         return False
     
     def ask_user_skip_step(self, step_name, step_index):
-        """Ask user if they want to skip a completed step or re-run it"""
-        # Emit signal to main thread to show dialog
-        self.user_choice_needed = True
-        self.pending_step_name = step_name
-        self.pending_step_index = step_index
-        self.user_choice_result = None
-        
-        # Emit signal to show dialog in main thread
-        self.show_skip_dialog.emit(step_name, step_index)
-        
-        # Wait for user choice (with timeout to prevent infinite wait)
-        timeout_count = 0
-        while self.user_choice_needed and timeout_count < 1000:  # 10 second timeout
-            time.sleep(0.01)
-            timeout_count += 1
-        
-        if timeout_count >= 1000:
-            return "cancel"  # Timeout - cancel processing
-        
-        return self.user_choice_result
+        """Automatically skip already-completed steps without prompting the user."""
+        return "skip"
     
     def set_user_choice(self, choice):
         """Set the user's choice from the dialog"""
@@ -1110,30 +1077,7 @@ class ProcessingDialog(QDialog):
         button_layout.addStretch()
         
         self.next_button = QPushButton("Next Step")
-        self.next_button.setFixedHeight(30)
-        self.next_button.setStyleSheet("""
-            QPushButton {
-                background-color: #0078d4;
-                border: none;
-                color: white;
-                border-radius: 4px;
-                font-weight: bold;
-                padding: 5px 15px; 
-            }
-            QPushButton:hover {
-                background-color: #106ebe;
-            }
-            QPushButton:pressed {
-                background-color: #005a9e;
-            }
-            QPushButton:disabled {
-                background-color: #6c757d;
-                color: #adb5bd;
-            }
-        """)
-        self.next_button.clicked.connect(self.next_step)
-        self.next_button.setEnabled(False)
-        button_layout.addWidget(self.next_button)
+        self.next_button.setVisible(False)  # Hidden — pipeline auto-advances
         
         
         self.cancel_button = QPushButton("Cancel")
@@ -1245,9 +1189,8 @@ class ProcessingDialog(QDialog):
                 self.add_output("All processing steps completed!")
                 self.processing_completed({"homography_output": "Processing completed successfully"})
             else:
-                # Not the final step - show next button
-                self.next_button.setEnabled(True)
-                self.next_button.setText(f"Next: {self.get_next_step_name()}")
+                # Auto-advance to the next step after a brief pause
+                QTimer.singleShot(300, self.next_step)
         else:
             self.add_output(f"{step_name} failed!")
             self.next_button.setEnabled(False)

@@ -29,6 +29,7 @@ except ImportError:
 
 # Add scripts directory to path to import field drawing functions
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+from staticProcess import identify_qb
 
 class VirtualFieldWidget(QWidget):
     """Widget that displays a static football field with player dots"""
