@@ -1042,29 +1042,8 @@ def create_dock_title_bar(dock, parent):
     scoreboard_btn.clicked.connect(lambda: toggle_scoreboard(parent, scoreboard_btn))
     layout.addWidget(scoreboard_btn)
 
-    # Formation adjustment-history toggle (same on/off pattern as the scoreboard).
-    history_btn = QPushButton("🕘")
-    history_btn.setCheckable(True)
-    history_btn.setChecked(False)  # off by default -- keep the field clean
-    history_btn.setToolTip("Toggle Formation Adjustment History")
-    history_btn.setStyleSheet("""
-        QPushButton {
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 3px;
-            padding: 4px 8px;
-            font-size: 12px;
-        }
-        QPushButton:hover {
-            background-color: #45a049;
-        }
-        QPushButton:checked {
-            background-color: #2196F3;
-        }
-    """)
-    history_btn.clicked.connect(lambda: toggle_formation_history(parent, history_btn))
-    layout.addWidget(history_btn)
+    # The formation adjustment history now lives inside the FormationPanel
+    # (the human-in-the-loop board), so there is no longer a field overlay toggle.
 
     title_bar.setLayout(layout)
     return title_bar

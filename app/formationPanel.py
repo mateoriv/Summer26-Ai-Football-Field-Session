@@ -19,6 +19,7 @@ import sys
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame,
+    QListWidget, QListWidgetItem,
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap, QPainter, QPen, QBrush, QColor, QFont
@@ -208,7 +209,53 @@ class FormationPanel(QWidget):
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color:#bbb; font-size:10px;")
         lay.addWidget(self.status)
+
+        # Adjustment history -- the human-in-the-loop record lives here in the
+        # board (next to Confirm), not as a separate overlay on the field.
+        hist_header = QLabel("History")
+        hist_header.setStyleSheet("color:#9a9a9a; font-size:10px;")
+        lay.addWidget(hist_header)
+        self.history_list = QListWidget()
+        self.history_list.setFixedHeight(120)
+        self.history_list.setStyleSheet(
+            "QListWidget{color:#ccc; background:#222; border:1px solid #444;"
+            "font-size:10px;} QListWidget::item{padding:2px;}")
+        lay.addWidget(self.history_list)
         lay.addStretch()
+
+    def _refresh_history(self):
+        """Reload this clip's confirmation history into the in-panel list,
+        newest first. Each row reads as the correction story: agreed vs override."""
+        self.history_list.clear()
+        if not self.video_name:
+            return
+        try:
+            import verified_store
+            hist = verified_store.load_formation_history(
+                self.video_name, self.folder_name, get_cache_dir())
+        except Exception as e:
+            self.history_list.addItem(f"(history unavailable: {e})")
+            return
+        if not hist:
+            item = QListWidgetItem("— no confirmations yet —")
+            item.setForeground(QColor("#888"))
+            self.history_list.addItem(item)
+            return
+        for row in reversed(hist):  # newest first
+            chosen = row.get("chosen_formation", "?")
+            sys_pick = row.get("system_pick", "")
+            agreed = row.get("agreed")
+            if not isinstance(agreed, bool):
+                agreed = str(agreed).strip().lower() == "true"
+            if agreed:
+                text = f"✓ {chosen}  (agreed with AI)"
+                color = QColor("#7dd77d")
+            else:
+                text = f"✎ {chosen}" + (f"   (AI: {sys_pick})" if sys_pick else "  (override)")
+                color = QColor("#ffcf6b")
+            item = QListWidgetItem(text)
+            item.setForeground(color)
+            self.history_list.addItem(item)
 
     def _btn_style(self, marked=False):
         if marked:  # the system pick: amber border so the coach sees the AI choice
@@ -262,6 +309,7 @@ class FormationPanel(QWidget):
             self.preview.clear(); self.preview_caption.setText("")
         self.confirm_btn.setEnabled(bool(system_pick) or bool(self.templates))
         self.status.setText("")
+        self._refresh_history()
 
     # ---------- interactions ----------
     def _on_hover(self, key):
@@ -331,4 +379,5 @@ class FormationPanel(QWidget):
         else:
             sp = pretty(self.system_pick) if self.system_pick else "—"
             self.status.setText(f"✓ Saved — overrode AI (was {sp})  →  {chosen}")
+        self._refresh_history()
         self.formation_confirmed.emit(chosen)

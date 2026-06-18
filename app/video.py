@@ -117,8 +117,14 @@ class CustomVideoWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background-color: black;")
-        self.position_detection_data = None 
+        self.position_detection_data = None
         self.yard_marker_data = None
+        # Per-frame homography output (carries the jersey-colour `team` field from
+        # assignTeamColors). Used to draw team-coloured boxes across the WHOLE play,
+        # so the video matches the virtual field instead of going grey off-snap.
+        self.homography_data = None
+        self._homography_frame_index = None   # sorted int frame keys, cached
+        self._homography_reliable = False      # team split flagged trustworthy
         self.current_frame = 0
         self.show_boxes = False
         self.show_yard_marker_boxes = False
@@ -167,6 +173,75 @@ class CustomVideoWidget(QWidget):
             print(f"   Total player detection frames: {len(data['frames'])}")
         self.update()
     
+    def set_homography_data(self, data):
+        """Set the per-frame homography output (with jersey `team` labels) used to
+        draw team-coloured player boxes across the whole play."""
+        self.homography_data = data if isinstance(data, dict) else None
+        self._homography_frame_index = None
+        self._homography_reliable = False
+        if self.homography_data:
+            meta = self.homography_data.get("team_color_meta") or {}
+            self._homography_reliable = bool(meta.get("reliable"))
+            np_ = self.homography_data.get("normalized_positions") or {}
+            try:
+                self._homography_frame_index = sorted(int(k) for k in np_.keys())
+            except (ValueError, TypeError):
+                self._homography_frame_index = None
+        self.update()
+
+    def _nearest_homography_key(self, frame_number, max_gap=5):
+        """Closest processed homography frame to `frame_number`, or None if the
+        nearest is farther than `max_gap` frames (homography is strided/gappy)."""
+        idx = self._homography_frame_index
+        if not idx:
+            return None
+        import bisect
+        pos = bisect.bisect_left(idx, frame_number)
+        cands = []
+        if pos < len(idx):
+            cands.append(idx[pos])
+        if pos > 0:
+            cands.append(idx[pos - 1])
+        if not cands:
+            return None
+        best = min(cands, key=lambda k: abs(k - frame_number))
+        return best if abs(best - frame_number) <= max_gap else None
+
+    def _homography_box_detections(self, frame_number):
+        """Per-frame player boxes in the detection-dict format _draw_single_bbox
+        expects, with `class` chosen so the box colours by TEAM: offense=red,
+        defense=blue, QB=gold, unknown=grey. Jersey `team` is trusted only when the
+        split was flagged reliable; otherwise we fall back to the role label."""
+        if not self.homography_data:
+            return []
+        key = self._nearest_homography_key(frame_number)
+        if key is None:
+            return []
+        players = (self.homography_data.get("normalized_positions") or {}).get(str(key))
+        if not players:
+            return []
+        dets = []
+        for p in players:
+            ob = p.get("original_bbox") or {}
+            if "x1" not in ob:
+                continue
+            label = str(p.get("object_label") or "player").lower()
+            team = p.get("team") if self._homography_reliable else None
+            if label == "qb":
+                cls = "qb"
+            elif team == "offense":
+                cls = "oline"        # any offense → red
+            elif team == "defense":
+                cls = "defense"      # → blue
+            elif label in ("oline", "running_back", "wide_receiver", "tight_end"):
+                cls = "oline"        # role known even without a reliable jersey split
+            elif label == "defense":
+                cls = "defense"
+            else:
+                cls = "player"       # unknown team → grey (honest, not a guess)
+            dets.append({"bbox": ob, "class": cls})
+        return dets
+
     def set_show_boxes(self, show):
         """Set whether to show player/position bounding boxes."""
         self.show_boxes = show
@@ -302,11 +377,27 @@ class CustomVideoWidget(QWidget):
                 if self.model_label or self.qb_label or self.coach_label or self.verified_qb:
                     self._draw_formation_label(painter, x_offset, y_offset)
 
+                # Player boxes: prefer per-frame, team-coloured boxes from the
+                # homography output (covers the WHOLE play and stays red/blue),
+                # falling back to the snap-window position data when no homography
+                # is loaded. Static-offense mode keeps its frozen snap view.
+                drew_team_boxes = False
+                if (self.show_boxes and self.homography_data
+                        and not getattr(self, 'show_offense_selection', False)
+                        and self.frame_width and self.frame_height):
+                    team_dets = self._homography_box_detections(self.current_frame)
+                    if team_dets:
+                        sx = scaled_pixmap.width() / self.frame_width
+                        sy = scaled_pixmap.height() / self.frame_height
+                        for det in team_dets:
+                            self._draw_single_bbox(painter, det, sx, sy, x_offset, y_offset)
+                        drew_team_boxes = True
+
                 # Define data sources to draw
                 video_data_sources = []
-                if self.show_boxes and self.position_detection_data:
+                if self.show_boxes and self.position_detection_data and not drew_team_boxes:
                     video_data_sources.append(self.position_detection_data)
-                
+
                 if self.show_yard_marker_boxes and self.yard_marker_data:
                     video_data_sources.append(self.yard_marker_data)
 
@@ -337,7 +428,7 @@ class CustomVideoWidget(QWidget):
                                                    is_center=(detection is center_det))
 
                 # Team-colour legend so red/blue/gold reads without a manual.
-                if self.show_boxes and self.position_detection_data:
+                if self.show_boxes and (drew_team_boxes or self.position_detection_data):
                     self._draw_team_legend(painter, x_offset, y_offset, scaled_pixmap.width())
 
                 # Gold crosshair ring at the human-verified QB, shown around
@@ -2356,9 +2447,14 @@ def toggle_legend(parent, button=None):
         layout.addLayout(row)
 
     legend.adjustSize()
-    legend.show()
 
-    parent.position_legend()
+    # Position near the top-right corner of the parent window
+    parent_geo = parent.frameGeometry()
+    x = parent_geo.right() - legend.width() - 30
+    y = parent_geo.top() + 80
+    legend.move(x, y)
+
+    legend.show()
 
 
 def load_and_set_detection_data(parent, data_type):
@@ -2400,9 +2496,11 @@ def load_and_set_detection_data(parent, data_type):
             if hasattr(parent, 'custom_video'):
                 if data_type == "players":
                     parent.custom_video.set_detection_data(data)
+                    _load_homography_for_video(parent, video_name,
+                                               current_folder_name, base_cache_dir)
                 elif data_type == "yard_markers":
                     parent.custom_video.yard_marker_data = data
-                
+
             else:
                 print("No custom video widget found")
                 
@@ -2418,9 +2516,31 @@ def load_and_set_detection_data(parent, data_type):
         if hasattr(parent, 'custom_video'):
             if data_type == "players":
                 parent.custom_video.set_detection_data(None)
+                parent.custom_video.set_homography_data(None)
                 parent.custom_video.set_show_boxes(False)
             elif data_type == "yard_markers":
                 parent.custom_video.yard_marker_data = None
+
+
+def _load_homography_for_video(parent, video_name, folder_name, base_cache_dir):
+    """Load per-frame homography (with jersey `team` colours from assignTeamColors)
+    so the video can draw team-coloured boxes across the whole play, matching the
+    virtual field. Missing/unprocessed clips simply fall back to the old behaviour."""
+    if not hasattr(parent, 'custom_video'):
+        return
+    path = os.path.join(base_cache_dir, os.path.basename(folder_name),
+                        "homography", f"{video_name}_normalized_positions.json")
+    if not os.path.exists(path):
+        parent.custom_video.set_homography_data(None)
+        return
+    try:
+        with open(path, 'r') as f:
+            parent.custom_video.set_homography_data(json.load(f))
+        print(f"Loaded homography for whole-play team boxes: {os.path.basename(path)}")
+    except Exception as e:
+        print(f"Error loading homography for team boxes: {e}")
+        parent.custom_video.set_homography_data(None)
+
 
 def load_and_set_detection_data_fallback(parent):
     """
