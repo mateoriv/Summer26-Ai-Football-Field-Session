@@ -1558,6 +1558,11 @@ def _load_formation_label_for_current_video(parent):
                 rank_keys = [r[0] if isinstance(r, (list, tuple)) else r for r in raw_rank]
                 panel.set_choices((res or {}).get("formation"), model_conf,
                                   rank_keys, video_name, folder_name)
+            # Point the field's history overlay at this clip (refreshes its
+            # contents; stays hidden/shown per the coach's toggle).
+            vf = getattr(parent, "virtual_field", None)
+            if vf is not None and getattr(vf, "history_overlay", None) is not None:
+                vf.history_overlay.set_clip(video_name, folder_name)
         except Exception as e:
             print(f"[FORMATION PANEL] update failed: {e}")
 

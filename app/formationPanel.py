@@ -294,19 +294,35 @@ class FormationPanel(QWidget):
             return
         chosen = pretty(key)
         agreed = (key == self.system_pick)
+        sys_pick = pretty(self.system_pick) if self.system_pick else ""
         try:
             import verified_store
             base_cache = get_cache_dir()
+            prev = (verified_store.load_verified(
+                self.video_name, self.folder_name, base_cache) or {}).get("formation") or {}
+            prev_formation = prev.get("formation", "")
             verified_store.save_formation_verification(
                 self.video_name, self.folder_name, base_cache,
-                {"formation": chosen, "system_pick": pretty(self.system_pick) if self.system_pick else "",
+                {"formation": chosen, "system_pick": sys_pick,
                  "system_confidence": self.system_conf, "agreed": bool(agreed)})
             verified_store.append_formation_training_label(self.folder_name, base_cache, {
                 "folder": self.folder_name, "clip": self.video_name,
                 "chosen_formation": chosen,
-                "system_pick": pretty(self.system_pick) if self.system_pick else "",
+                "system_pick": sys_pick,
                 "system_confidence": "" if self.system_conf is None else self.system_conf,
                 "agreed": bool(agreed), "verified_at": ""})
+            # Append-only audit trail of every confirmation/correction for this clip.
+            hist = verified_store.load_formation_history(
+                self.video_name, self.folder_name, base_cache)
+            verified_store.append_formation_history(self.folder_name, base_cache, {
+                "folder": self.folder_name, "clip": self.video_name,
+                "seq": len(hist),  # save_* already appended this confirmation
+                "chosen_formation": chosen,
+                "previous_formation": prev_formation,
+                "system_pick": sys_pick,
+                "system_confidence": "" if self.system_conf is None else self.system_conf,
+                "agreed": bool(agreed),
+                "verified_at": (hist[-1].get("verified_at", "") if hist else "")})
         except Exception as e:
             self.status.setText(f"save failed: {e}")
             return

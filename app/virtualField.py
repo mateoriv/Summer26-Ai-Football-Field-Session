@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QSlider
+from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QSlider, QFrame, QScrollArea
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap, QPainter, QPen, QBrush, QColor, QFont
 import subprocess
@@ -31,6 +31,102 @@ except ImportError:
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 from staticProcess import identify_qb
 
+class FormationHistoryOverlay(QFrame):
+    """Floating panel ON the virtual field listing the coach's formation
+    confirmations/corrections for the current clip (newest first).
+
+    Toggled on/off from the dock title bar: off keeps the field clean; on lets
+    the coach keep the running history visible while picking a different
+    formation in the side panel. It floats over the field (a child of it) so it
+    never steals layout space when hidden."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.video_name = None
+        self.folder_name = None
+        self.setObjectName("formationHistoryOverlay")
+        self.setStyleSheet(
+            "#formationHistoryOverlay{background-color: rgba(18,18,18,228);"
+            "border:1px solid #6a6a6a; border-radius:6px;}")
+        self.setFixedWidth(240)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 8)
+        lay.setSpacing(4)
+
+        head = QHBoxLayout()
+        title = QLabel("Adjustment history")
+        title.setStyleSheet("color:#ffd060; font-weight:bold; font-size:11px;"
+                            "background:transparent; border:none;")
+        head.addWidget(title)
+        head.addStretch()
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(18, 18)
+        close_btn.setToolTip("Hide history")
+        close_btn.setStyleSheet(
+            "QPushButton{color:#ddd; background:#444; border:none; border-radius:9px;"
+            "font-weight:bold;} QPushButton:hover{background:#a33;}")
+        close_btn.clicked.connect(self.hide)
+        head.addWidget(close_btn)
+        lay.addLayout(head)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setStyleSheet("background:transparent; border:none;")
+        self.body = QLabel("")
+        self.body.setWordWrap(True)
+        self.body.setTextFormat(Qt.RichText)
+        self.body.setAlignment(Qt.AlignTop)
+        self.body.setStyleSheet("color:#e8e8e8; font-size:10px;"
+                                "background:transparent; border:none;")
+        self.scroll.setWidget(self.body)
+        lay.addWidget(self.scroll)
+        self.hide()
+
+    def set_clip(self, video_name, folder_name):
+        """Point the overlay at a clip and reload its history."""
+        self.video_name = video_name
+        self.folder_name = folder_name
+        self.refresh()
+
+    def refresh(self):
+        """Reload the current clip's history from verified_store into the view."""
+        import html
+        hist = []
+        if self.video_name:
+            try:
+                _fd = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "..", "formations")
+                if _fd not in sys.path:
+                    sys.path.append(_fd)
+                import verified_store
+                hist = verified_store.load_formation_history(
+                    self.video_name, self.folder_name, get_cache_dir())
+            except Exception:
+                hist = []
+        if not hist:
+            self.body.setText(
+                "<i style='color:#999;'>No confirmations yet for this clip.</i>")
+            return
+        blocks = []
+        for e in reversed(hist):
+            when = html.escape((e.get("verified_at") or "")
+                               .replace("T", " ").replace("+00:00", ""))
+            chosen = html.escape(str(e.get("formation", "—")))
+            prev = html.escape(str(e.get("previous_formation") or ""))
+            if e.get("agreed"):
+                tag = "<span style='color:#7fd47f;'>agreed AI</span>"
+            elif prev and prev != chosen:
+                tag = f"<span style='color:#e0a040;'>changed from {prev}</span>"
+            else:
+                tag = "<span style='color:#e0a040;'>overrode AI</span>"
+            blocks.append(f"<b>#{html.escape(str(e.get('seq','')))} {chosen}</b> "
+                          f"— {tag}<br><span style='color:#888;'>{when}</span>")
+        self.body.setText(
+            "<div style='border-top:1px solid #444; margin:4px 0;'></div>".join(blocks))
+
+
 class VirtualFieldWidget(QWidget):
     """Widget that displays a static football field with player dots"""
 
@@ -58,7 +154,25 @@ class VirtualFieldWidget(QWidget):
 
         # Load field image
         self.load_field_image()
-        
+
+        # Toggleable adjustment-history overlay (floats over the field, hidden
+        # until the coach turns it on from the dock title bar).
+        self.history_overlay = FormationHistoryOverlay(self)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_history_overlay()
+
+    def _position_history_overlay(self):
+        """Anchor the history overlay to the field's top-right corner."""
+        ov = getattr(self, "history_overlay", None)
+        if not ov:
+            return
+        margin = 10
+        h = max(min(self.height() - 2 * margin, 340), 90)
+        ov.resize(ov.width(), h)
+        ov.move(max(self.width() - ov.width() - margin, margin), margin)
+
     def load_field_image(self):
         """Load a simple football field image as background"""
         # Create a simple field image without matplotlib to avoid layering issues
@@ -927,9 +1041,47 @@ def create_dock_title_bar(dock, parent):
     """)
     scoreboard_btn.clicked.connect(lambda: toggle_scoreboard(parent, scoreboard_btn))
     layout.addWidget(scoreboard_btn)
-    
+
+    # Formation adjustment-history toggle (same on/off pattern as the scoreboard).
+    history_btn = QPushButton("🕘")
+    history_btn.setCheckable(True)
+    history_btn.setChecked(False)  # off by default -- keep the field clean
+    history_btn.setToolTip("Toggle Formation Adjustment History")
+    history_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+        QPushButton:hover {
+            background-color: #45a049;
+        }
+        QPushButton:checked {
+            background-color: #2196F3;
+        }
+    """)
+    history_btn.clicked.connect(lambda: toggle_formation_history(parent, history_btn))
+    layout.addWidget(history_btn)
+
     title_bar.setLayout(layout)
     return title_bar
+
+
+def toggle_formation_history(parent, button):
+    """Show/hide the adjustment-history overlay on the virtual field."""
+    ov = getattr(getattr(parent, "virtual_field", None), "history_overlay", None)
+    if ov is None:
+        return
+    if button.isChecked():
+        parent.virtual_field._position_history_overlay()
+        ov.refresh()
+        ov.show()
+        ov.raise_()
+    else:
+        ov.hide()
 
 def create_virtual_field_dock(parent):
     """Create a simplified virtual field dock with static field image and player dots"""
@@ -970,6 +1122,13 @@ def create_virtual_field_dock(parent):
                 _load_formation_label_for_current_video(p)
             except Exception as e:
                 print(f"[FORMATION PANEL] refresh after confirm failed: {e}")
+            # Keep the history overlay current after a new confirmation.
+            try:
+                ov = getattr(getattr(p, "virtual_field", None), "history_overlay", None)
+                if ov is not None:
+                    ov.refresh()
+            except Exception as e:
+                print(f"[FORMATION HISTORY] refresh after confirm failed: {e}")
         formation_panel.formation_confirmed.connect(_on_formation_confirmed)
     except Exception as e:
         print(f"[FORMATION PANEL] not loaded: {e}")

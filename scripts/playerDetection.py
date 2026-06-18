@@ -5,8 +5,11 @@ import numpy as np
 import sys
 from ultralytics import YOLO
 
-FRAME_STRIDE = 3  # process every Nth frame (~3x speedup)
-BATCH_SIZE = 8    # frames per YOLO inference call
+FRAME_STRIDE = 3  # process every 3rd frame (~3x faster). Snap detection + formation
+                  # snapshot all read from these same frames, so the snap frame is
+                  # always one of them — formation accuracy is preserved. Drop to 1
+                  # only for smoother motion replay. Inference-only: never needs retraining.
+BATCH_SIZE = 8    # frames per YOLO inference call (Will's batched-inference speedup)
 
 def playerDetection(video_path, model_path="yolo_models/bestPlayerDetectorM.pt", output_path="cache/playerDetection/playerDetection.json"):
     """

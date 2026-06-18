@@ -50,6 +50,16 @@ FORMATION_CSV = "formation_training_labels.csv"
 FORMATION_COLUMNS = ["folder", "clip", "chosen_formation", "system_pick",
                      "system_confidence", "agreed", "verified_at"]
 
+# Formation adjustment history: append-only audit trail. Unlike the flywheel CSV
+# (one current row per clip), this NEVER replaces -- every confirmation/override
+# is one immutable row, so the coach can see how a clip's call evolved and we
+# keep a full record of corrections. Mirrored inside the per-clip verified JSON
+# under "formation_history".
+FORMATION_HISTORY_CSV = "formation_history.csv"
+FORMATION_HISTORY_COLUMNS = ["folder", "clip", "seq", "chosen_formation",
+                             "previous_formation", "system_pick",
+                             "system_confidence", "agreed", "verified_at"]
+
 
 def verified_path(video_name, folder_name, base_cache_dir):
     return os.path.join(base_cache_dir, folder_name, VERIFIED_DIR,
@@ -108,14 +118,50 @@ def save_formation_verification(video_name, folder_name, base_cache_dir, formati
     data = load_verified(video_name, folder_name, base_cache_dir) or {}
     data.setdefault("version", 1)
     data["clip"] = video_name
+    prev = data.get("formation") or {}
     rec = dict(formation_record)
     rec.setdefault("verified_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
     rec.setdefault("verified_by", "ui_click")
+    # Append-only audit trail: keep every prior call, never overwrite the record
+    # of what was confirmed before. Latest stays in data["formation"].
+    history = data.get("formation_history")
+    if not isinstance(history, list):
+        history = []
+    entry = dict(rec)
+    entry["seq"] = len(history) + 1
+    entry["previous_formation"] = prev.get("formation", "")
+    history.append(entry)
+    data["formation_history"] = history
     data["formation"] = rec
     path = verified_path(video_name, folder_name, base_cache_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
+    return path
+
+
+def load_formation_history(video_name, folder_name, base_cache_dir):
+    """The clip's ordered list of formation confirmations (oldest first), or []."""
+    data = load_verified(video_name, folder_name, base_cache_dir) or {}
+    hist = data.get("formation_history")
+    return hist if isinstance(hist, list) else []
+
+
+def append_formation_history(folder_name, base_cache_dir, row):
+    """Append ONE immutable row to the formation adjustment-history CSV. Unlike
+    the flywheel CSV, this never replaces existing rows -- it is the audit log of
+    every confirmation/override the coach has ever made."""
+    path = os.path.join(base_cache_dir, folder_name, VERIFIED_DIR,
+                        FORMATION_HISTORY_CSV)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    is_new = not os.path.exists(path)
+    clean = {c: ("" if row.get(c) is None else row.get(c))
+             for c in FORMATION_HISTORY_COLUMNS}
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FORMATION_HISTORY_COLUMNS)
+        if is_new:
+            w.writeheader()
+        w.writerow(clean)
     return path
 
 
